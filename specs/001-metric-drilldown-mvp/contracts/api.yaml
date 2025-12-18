@@ -1,0 +1,650 @@
+openapi: 3.0.3
+info:
+  title: Metric Drill-Down Agent API
+  description: |
+    REST API for the Metric Drill-Down Agent MVP.
+    Provides session management, file uploads, investigation orchestration, and Q&A capabilities.
+  version: 1.0.0
+  contact:
+    name: API Support
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+
+tags:
+  - name: Sessions
+    description: Session lifecycle management
+  - name: Files
+    description: CSV file upload and management
+  - name: Investigation
+    description: Investigation execution and results
+  - name: Chat
+    description: Post-analysis Q&A
+
+paths:
+  /api/sessions:
+    post:
+      tags: [Sessions]
+      summary: Create a new investigation session
+      operationId: createSession
+      responses:
+        '201':
+          description: Session created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/sessions/{session_id}:
+    get:
+      tags: [Sessions]
+      summary: Get session status and metadata
+      operationId: getSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Session details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags: [Sessions]
+      summary: Delete a session and all its data
+      operationId: deleteSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Session deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/sessions/{session_id}/files:
+    post:
+      tags: [Files]
+      summary: Upload a CSV file to the session
+      operationId: uploadFile
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+                - description
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: CSV file to upload (max 50MB)
+                description:
+                  type: string
+                  maxLength: 2000
+                  description: User-provided description of file contents
+      responses:
+        '201':
+          description: File uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileUploadResponse'
+        '400':
+          description: Invalid file or validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                fileTooLarge:
+                  summary: File exceeds size limit
+                  value:
+                    error:
+                      code: FILE_TOO_LARGE
+                      message: "File exceeds maximum size of 50MB"
+                invalidType:
+                  summary: Invalid file type
+                  value:
+                    error:
+                      code: INVALID_FILE_TYPE
+                      message: "Only CSV files are accepted"
+                noHeaders:
+                  summary: Missing headers
+                  value:
+                    error:
+                      code: NO_HEADERS
+                      message: "CSV file must have a header row"
+                maxFiles:
+                  summary: Max files reached
+                  value:
+                    error:
+                      code: MAX_FILES_EXCEEDED
+                      message: "Maximum of 10 files per session"
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/sessions/{session_id}/files/{file_id}:
+    put:
+      tags: [Files]
+      summary: Update file description
+      operationId: updateFileDescription
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/FileId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - description
+              properties:
+                description:
+                  type: string
+                  maxLength: 2000
+      responses:
+        '200':
+          description: Description updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        '404':
+          description: Session or file not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags: [Files]
+      summary: Remove a file from the session
+      operationId: deleteFile
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: File removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        '404':
+          description: Session or file not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Cannot delete file during investigation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/sessions/{session_id}/investigate:
+    post:
+      tags: [Investigation]
+      summary: Start the investigation
+      operationId: startInvestigation
+      description: |
+        Triggers the AI agent to analyze uploaded files and generate explanations.
+        Requires at least one file to be uploaded and metric SQL to be provided.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvestigationRequest'
+      responses:
+        '202':
+          description: Investigation started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvestigationResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                noFiles:
+                  summary: No files uploaded
+                  value:
+                    error:
+                      code: NO_FILES_UPLOADED
+                      message: "At least one CSV file must be uploaded"
+                noMetricSql:
+                  summary: Missing metric definition
+                  value:
+                    error:
+                      code: METRIC_SQL_REQUIRED
+                      message: "Metric SQL or description is required"
+                invalidDates:
+                  summary: Invalid date range
+                  value:
+                    error:
+                      code: INVALID_DATE_RANGE
+                      message: "Date range is invalid"
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Investigation already running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/sessions/{session_id}/report:
+    get:
+      tags: [Investigation]
+      summary: Get the investigation report
+      operationId: getReport
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Report content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportResponse'
+        '202':
+          description: Investigation still running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: running
+                  message:
+                    type: string
+                    example: "Investigation in progress"
+        '404':
+          description: Session not found or no report available
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/sessions/{session_id}/report/download:
+    get:
+      tags: [Investigation]
+      summary: Download report as markdown file
+      operationId: downloadReport
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Markdown file download
+          content:
+            text/markdown:
+              schema:
+                type: string
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              example: 'attachment; filename="investigation_report.md"'
+        '404':
+          description: Session not found or no report available
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/sessions/{session_id}/chat:
+    post:
+      tags: [Chat]
+      summary: Send a Q&A message
+      operationId: sendChatMessage
+      description: |
+        Send a question about the investigation. Only available after investigation completes.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Chat response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+        '400':
+          description: Invalid message
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Investigation not complete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: INVESTIGATION_NOT_COMPLETE
+                  message: "Q&A is only available after investigation completes"
+
+    get:
+      tags: [Chat]
+      summary: Get chat history
+      operationId: getChatHistory
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Chat history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ChatMessage'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  parameters:
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Unique session identifier
+
+    FileId:
+      name: file_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Unique file identifier
+
+  schemas:
+    SessionResponse:
+      type: object
+      required:
+        - session_id
+        - status
+        - created_at
+        - expires_at
+        - file_count
+        - report_ready
+      properties:
+        session_id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        status:
+          type: string
+          enum: [created, has_files, running, completed, failed, expired]
+          example: has_files
+        created_at:
+          type: string
+          format: date-time
+          example: "2025-12-17T10:30:00Z"
+        expires_at:
+          type: string
+          format: date-time
+          example: "2025-12-18T10:30:00Z"
+        file_count:
+          type: integer
+          minimum: 0
+          example: 3
+        report_ready:
+          type: boolean
+          example: false
+
+    FileUploadResponse:
+      type: object
+      required:
+        - file_id
+        - original_name
+        - row_count
+        - size_bytes
+      properties:
+        file_id:
+          type: string
+          format: uuid
+          example: "660e8400-e29b-41d4-a716-446655440001"
+        original_name:
+          type: string
+          example: "user_activity.csv"
+        row_count:
+          type: integer
+          minimum: 1
+          example: 15420
+        size_bytes:
+          type: integer
+          minimum: 1
+          example: 2456789
+
+    DateRange:
+      type: object
+      required:
+        - start
+        - end
+      properties:
+        start:
+          type: string
+          format: date
+          example: "2025-11-24"
+        end:
+          type: string
+          format: date
+          example: "2025-11-30"
+
+    InvestigationRequest:
+      type: object
+      required:
+        - metric_sql
+        - baseline_period
+        - comparison_period
+      properties:
+        business_context:
+          type: string
+          maxLength: 5000
+          description: Background information about the metric and business context
+          example: "DAU has been declining for the past week. We recently released a new onboarding flow on December 1st."
+        metric_sql:
+          type: string
+          maxLength: 2000
+          description: SQL query or text description defining the metric
+          example: "SELECT COUNT(DISTINCT user_id) as dau FROM user_activity WHERE event_type = 'session_start' GROUP BY date"
+        baseline_period:
+          $ref: '#/components/schemas/DateRange'
+        comparison_period:
+          $ref: '#/components/schemas/DateRange'
+        investigation_prompt:
+          type: string
+          maxLength: 2000
+          description: Optional specific focus areas or suspected causes
+          example: "I suspect the new onboarding flow might be causing issues. Please check by platform and user tenure."
+
+    InvestigationResponse:
+      type: object
+      required:
+        - status
+        - message
+      properties:
+        status:
+          type: string
+          enum: [running, completed, failed]
+          example: running
+        message:
+          type: string
+          example: "Investigation started successfully"
+
+    ReportResponse:
+      type: object
+      required:
+        - content
+        - generated_at
+        - status
+      properties:
+        content:
+          type: string
+          description: Full markdown report content
+          example: "# DAU Investigation Report\n\n## Summary\n..."
+        generated_at:
+          type: string
+          format: date-time
+          example: "2025-12-17T10:45:00Z"
+        status:
+          type: string
+          enum: [completed, no_findings]
+          example: completed
+
+    ChatRequest:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          maxLength: 5000
+          example: "How did you calculate the contribution percentage?"
+
+    ChatResponse:
+      type: object
+      required:
+        - response
+      properties:
+        response:
+          type: string
+          example: "The contribution percentage was calculated by dividing the segment's change..."
+        artifacts_referenced:
+          type: array
+          items:
+            type: string
+          example: ["analysis/hypotheses/hyp_001.json", "results/explanations.json"]
+
+    ChatMessage:
+      type: object
+      required:
+        - message_id
+        - role
+        - content
+        - timestamp
+      properties:
+        message_id:
+          type: string
+          format: uuid
+          example: "770e8400-e29b-41d4-a716-446655440002"
+        role:
+          type: string
+          enum: [user, assistant]
+          example: user
+        content:
+          type: string
+          example: "How did you calculate the contribution percentage?"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2025-12-17T10:50:00Z"
+        artifacts_referenced:
+          type: array
+          items:
+            type: string
+          example: []
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code
+              example: SESSION_NOT_FOUND
+            message:
+              type: string
+              description: Human-readable error message
+              example: "Session with ID 550e8400-e29b-41d4-a716-446655440000 not found"
+            details:
+              type: object
+              additionalProperties: true
+              description: Additional error context
