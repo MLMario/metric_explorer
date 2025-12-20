@@ -9,7 +9,7 @@
 
 ### User Story 1 - Complete Metric Investigation (Priority: P1)
 
-A senior data scientist notices that DAU dropped 8% week-over-week. They need to understand what's driving this decline. They upload 3 CSV files (user_activity, users, sessions), provide the metric SQL definition, add business context about recent product changes, and submit an investigation prompt. The agent analyzes the data, infers relationships between tables, identifies relevant dimensions, runs segmentation analysis, and produces a ranked explanation report explaining the metric movement.
+A senior data scientist notices that DAU dropped 8% week-over-week. They need to understand what's driving this decline. They upload 3 CSV files (user_activity, users, sessions), specify the target metric column name (e.g., "dau"), provide a metric definition describing how DAU is calculated, add business context about recent product changes, and submit an investigation prompt. The agent analyzes the data, infers relationships between tables, identifies relevant dimensions, runs segmentation analysis, and produces a ranked explanation report explaining the metric movement.
 
 **Why this priority**: This is the core value proposition of the product. Without a complete investigation flow producing actionable explanations, the tool has no value. Every other feature depends on this working end-to-end.
 
@@ -17,7 +17,7 @@ A senior data scientist notices that DAU dropped 8% week-over-week. They need to
 
 **Acceptance Scenarios**:
 
-1. **Given** a user has uploaded 3 CSV files with descriptions and provided metric SQL and business context, **When** they click "Start Agent", **Then** the system displays progress indicators and produces a markdown report within 5 minutes
+1. **Given** a user has uploaded 3 CSV files with descriptions, specified target metric column, and provided metric definition and business context, **When** they click "Start Agent", **Then** the system displays progress indicators and produces a markdown report within 5 minutes
 2. **Given** an investigation is complete, **When** the user views the report, **Then** they see a data model diagram, list of analyzed dimensions, ranked explanations with evidence and likelihood reasoning, and recommended next steps
 3. **Given** the agent is analyzing data, **When** it generates explanations, **Then** each explanation shows supporting evidence (segment sizes, % contribution, rate comparisons) and likelihood reasoning
 4. **Given** uploaded CSV files have relatable columns (e.g., user_id in multiple tables), **When** the agent infers schema, **Then** it correctly identifies foreign key relationships and displays them in the report
@@ -43,7 +43,7 @@ After receiving an investigation report, the data scientist has questions about 
 
 ### User Story 3 - Form-Based Input with File Descriptions (Priority: P3)
 
-A data scientist visits the application and sees a structured form with clear sections. They upload CSV files one at a time, adding descriptions for each explaining what the file contains and how it relates to the investigation. They fill in the business context, metric SQL, and investigation prompt in separate text areas. The form validates that required fields are complete before submission.
+A data scientist visits the application and sees a structured form with clear sections. They upload CSV files one at a time, adding descriptions for each explaining what the file contains and how it relates to the investigation. They specify the target metric column name, fill in the metric definition, business context, and investigation prompt in separate text areas. The form validates that required fields are complete before submission.
 
 **Why this priority**: Good UX reduces friction and ensures the agent receives complete context. However, a minimal form could work for initial testing; structured input is an enhancement.
 
@@ -77,7 +77,7 @@ After reviewing the investigation report, the data scientist wants to save it fo
 
 - What happens when a user uploads a CSV file with no headers? System displays an error indicating headers are required for schema inference.
 - What happens when uploaded CSVs have no relatable columns (no shared keys)? Agent proceeds with single-table analysis and connects insights from single tables analysises  logically, it also notes in the report that cross-table queries where not possible.
-- What happens when the metric SQL references a table not uploaded? Agent reports which required tables are missing and prompts user to upload them or specify which table CSV is the one that is refered in the SQL query.
+- What happens when the target metric column is not found in any uploaded file? System displays an error listing all available columns from uploaded files and prompts user to correct the target metric name or upload additional files.
 - What happens when CSV files are too large (> 50MB)? System displays a file size limit error before upload completes.
 - What happens when the agent cannot identify any meaningful explanations? Report states that no significant patterns were found and suggests potential reasons (e.g., uniform change across all segments).
 - What happens when user submits investigation with empty business context? Investigation proceeds but report notes that limited context was provided, which may affect explanation quality.
@@ -99,9 +99,11 @@ After reviewing the investigation report, the data scientist wants to save it fo
 - **FR-001**: System MUST accept multiple CSV file uploads (minimum 1, maximum 10 files per investigation)
 - **FR-002**: System MUST require a text description for each uploaded file explaining its contents
 - **FR-003**: System MUST accept a free-text business context field describing relevant background information
-- **FR-004**: System MUST accept a metric SQL definition or free text description showing how the metric is calculated
+- **FR-004**: System MUST require user to specify the target metric column name that will be analyzed (must exist in uploaded CSV files)
+- **FR-004a**: System MUST accept a metric definition (free text) describing how the metric is calculated (for LLM context only, not for computation)
+- **FR-004b**: System MUST validate that target metric column exists in at least one uploaded CSV file before investigation starts
 - **FR-005**: System MUST accept an optional investigation prompt with specific focus areas or suspected causes
-- **FR-006**: System MUST validate that at least one CSV file and the required data to calculate the metric defined in the SQL field that are provided before submission
+- **FR-006**: System MUST validate that at least one CSV file is uploaded and the target metric column exists before submission
 - **FR-006a**: System MUST provide two date range pickers: one for the baseline period and one for the comparison period (e.g., "Nov 24-30" vs "Dec 1-7")
 
 **Ai Agent Capabilities**
@@ -141,7 +143,7 @@ After reviewing the investigation report, the data scientist wants to save it fo
 - **Session**: Represents a single investigation session. Contains session ID, creation timestamp, timeout configuration, and references to all artifacts. Deleted after configurable timeout.
 - **Uploaded File**: A CSV file provided by the user. Contains file name, user-provided description, detected schema (columns with inferred types), row count.
 - **Data Model**: Inferred relationships between uploaded files. Contains table names, column mappings, and foreign key relationships.
-- **Investigation Context**: User-provided inputs for the investigation. Contains business context text, metric SQL definition, investigation prompt, comparison date ranges.
+- **Investigation Context**: User-provided inputs for the investigation. Contains target metric column name, metric definition (text description), business context text, investigation prompt, comparison date ranges.
 - **Analysis Result**: Intermediate calculation outputs. Contains dimension segmentation results, contribution calculations, rate comparisons.
 - **Explanation**: A ranked finding explaining metric movement. Contains causal story, supporting evidence (segment data, % contribution, rate comparisons), likelihood label, and reasoning. An explanation can combine multiple related factors into a coherent narrative.
 - **Report**: Final markdown output. Contains all sections (data model, dimensions, explanations, recommended next steps).
@@ -164,7 +166,8 @@ After reviewing the investigation report, the data scientist wants to save it fo
 
 ### Assumptions
 
-- Users have access to SQL query or text based definitions for their metrics that will allow the AI Agent to compute the metric we want to analyze (not just dashboard links)
+- Users know the column name in their data that contains the metric they want to analyze
+- Users can provide a text description of how the metric is calculated (for LLM context)
 - CSV files are properly formatted with headers in the first row
 - Users can export relevant data to CSV from their data warehouse
 - Investigation sessions are standalone; users do not need to reference prior sessions

@@ -33,11 +33,12 @@ This document defines all data entities, their attributes, and relationships for
 │                 │        │    CONTEXT      │
 │  file_id (PK)   │        │                 │
 │  session_id (FK)│        │  session_id (FK)│
-│  name           │        │  business_ctx   │
-│  description    │        │  metric_sql     │
-│  schema         │        │  baseline_dates │
-│  row_count      │        │  comparison_dates│
-│  path           │        │  prompt         │
+│  name           │        │  target_metric  │
+│  description    │        │  metric_defn    │
+│  schema         │        │  business_ctx   │
+│  row_count      │        │  baseline_dates │
+│  path           │        │  comparison_dates│
+│                 │        │  prompt         │
 └────────┬────────┘        └────────┬────────┘
          │                          │
          │ 1:1                      │
@@ -55,14 +56,16 @@ This document defines all data entities, their attributes, and relationships for
 │  Referenced by Analysis
 ▼
 ┌─────────────────┐        ┌─────────────────┐
-│   DATA_MODEL    │        │ ANALYSIS_PLAN   │
+│   DATA_MODEL    │        │METRIC_REQUIREMENTS│
 │   (Inferred)    │        │                 │
 │                 │        │  session_id (FK)│
-│  session_id (FK)│        │  objectives[]   │
-│  tables[]       │        │  created_at     │
-│  relationships[]│        └────────┬────────┘
-│  dimensions[]   │                 │
-└────────┬────────┘                 │
+│  session_id (FK)│        │  target_metric  │
+│  tables[]       │        │  source_file    │
+│  relationships[]│        │  validated      │
+│  dimensions[]   │        │  error_message  │
+└────────┬────────┘        └────────┬────────┘
+         │                          │
+         │                          │ (if validated)
          │                          ▼
          │                 ┌─────────────────┐
          │                 │   HYPOTHESIS    │
@@ -232,8 +235,9 @@ User-provided inputs for the investigation.
 | Attribute | Type | Constraints | Description |
 |-----------|------|-------------|-------------|
 | `session_id` | `string (UUID)` | FK → Session, Required | Parent session |
+| `target_metric` | `string` | Required, max 100 | Column name to analyze (must exist in CSV files) |
+| `metric_definition` | `string` | Required, max 2000 | Text description of how metric is calculated (for LLM context) |
 | `business_context` | `string` | Optional, max 5000 | Background information about the metric |
-| `metric_sql` | `string` | Required, max 2000 | SQL or text definition of the metric |
 | `baseline_period` | `DateRange` | Required | Reference time period |
 | `comparison_period` | `DateRange` | Required | Period being investigated |
 | `investigation_prompt` | `string` | Optional, max 2000 | Specific focus areas or suspected causes |
@@ -249,7 +253,8 @@ User-provided inputs for the investigation.
 **Validation Rules**:
 - `baseline_period.end` < `comparison_period.start` OR periods can overlap (user choice)
 - At least one file must be uploaded before submission (FR-006)
-- `metric_sql` must be provided (FR-004)
+- `target_metric` must be provided (FR-004)
+- `target_metric` column must exist in at least one uploaded file (FR-004b)
 
 **Storage**: `sessions/{session_id}/context.json`
 
@@ -291,27 +296,53 @@ Inferred relationships between uploaded files.
 
 ---
 
-### AnalysisPlan
+### MetricRequirements
 
-Structured plan for investigating the metric.
+Validation result from the metric_identification node. Confirms that the user-specified target metric column exists in the uploaded files.
 
 | Attribute | Type | Constraints | Description |
 |-----------|------|-------------|-------------|
 | `session_id` | `string (UUID)` | FK → Session, Required | Parent session |
-| `steps` | `array<PlanStep>` | Required | Ordered analysis steps |
-| `created_at` | `datetime (ISO)` | Required | Plan creation timestamp |
+| `target_metric` | `string` | Required | Column name user wants to analyze |
+| `source_file` | `object` | Optional | {file_id, file_name} where column was found |
+| `validated` | `boolean` | Required | True if column was found |
+| `error_message` | `string` | Optional | Error details if not validated |
+| `created_at` | `datetime (ISO)` | Required | Validation timestamp |
 
-**PlanStep**:
+**SourceFile** (when validated=true):
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `step_number` | `integer` | Execution order |
-| `phase` | `string` | `exploration`, `hypothesis_generation`, `validation` |
-| `description` | `string` | What this step accomplishes |
-| `tables_involved` | `array<string>` | Files/tables used |
-| `dimensions_to_check` | `array<string>` | Columns to analyze |
+| `file_id` | `string (UUID)` | Reference to UploadedFile containing this column |
+| `file_name` | `string` | Human-readable file name |
 
-**Storage**: `sessions/{session_id}/analysis/plan.json`
+**Example (valid)**:
+```json
+{
+  "session_id": "abc-123",
+  "target_metric": "dau",
+  "source_file": {"file_id": "file-001", "file_name": "user_metrics.csv"},
+  "validated": true,
+  "error_message": null,
+  "created_at": "2025-12-17T10:30:00Z"
+}
+```
+
+**Example (invalid)**:
+```json
+{
+  "session_id": "abc-123",
+  "target_metric": "dau",
+  "source_file": null,
+  "validated": false,
+  "error_message": "Column 'dau' not found in any uploaded file. Available columns: event_date, revenue, session_count, user_id",
+  "created_at": "2025-12-17T10:30:00Z"
+}
+```
+
+**Error State**: When `validated = false`, the investigation exits early with the error message.
+
+**Storage**: `sessions/{session_id}/analysis/metric_requirements.json`
 
 ---
 
@@ -509,7 +540,7 @@ sessions/{session_id}/
 │   └── {file_id}_meta.json     # UploadedFile metadata + FileSchema
 ├── analysis/
 │   ├── schema.json             # DataModel entity
-│   ├── plan.json               # AnalysisPlan entity
+│   ├── metric_requirements.json # MetricRequirements entity
 │   ├── hypotheses/
 │   │   ├── hyp_001.json        # Hypothesis with status
 │   │   ├── hyp_002.json
@@ -584,8 +615,9 @@ class FileMetadataUpdate(BaseModel):
     description: str = Field(..., max_length=2000)
 
 class InvestigationRequest(BaseModel):
+    target_metric: str = Field(..., max_length=100)
+    metric_definition: str = Field(..., max_length=2000)
     business_context: Optional[str] = Field(None, max_length=5000)
-    metric_sql: str = Field(..., max_length=2000)
     baseline_period: DateRange
     comparison_period: DateRange
     investigation_prompt: Optional[str] = Field(None, max_length=2000)
@@ -625,6 +657,7 @@ See [plan.md](./plan.md#agent-state-schema) for the full `InvestigationState` Ty
 | List session files | List `sessions/{id}/files/*.csv` |
 | Get file metadata | Read `sessions/{id}/files/{fid}_meta.json` |
 | Get analysis artifacts | Read `sessions/{id}/analysis/*.json` |
+| Get metric requirements | Read `sessions/{id}/analysis/metric_requirements.json` |
 | Get findings ledger | Read `sessions/{id}/analysis/findings_ledger.json` |
 | Get iteration log | Read `sessions/{id}/analysis/iterations/iter_{N}.json` |
 | Get raw output | Read `sessions/{id}/analysis/full_outputs/output_{N}.txt` |
@@ -650,7 +683,9 @@ See [plan.md](./plan.md#agent-state-schema) for the full `InvestigationState` Ty
 | UploadedFile | max 50MB | `FILE_TOO_LARGE` |
 | UploadedFile | must have .csv extension | `INVALID_FILE_TYPE` |
 | UploadedFile | must have header row | `NO_HEADERS` |
-| InvestigationContext | metric_sql required | `METRIC_SQL_REQUIRED` |
+| InvestigationContext | target_metric required | `TARGET_METRIC_REQUIRED` |
+| InvestigationContext | metric_definition required | `METRIC_DEFINITION_REQUIRED` |
 | InvestigationContext | at least 1 file uploaded | `NO_FILES_UPLOADED` |
 | InvestigationContext | dates valid | `INVALID_DATE_RANGE` |
+| MetricRequirements | target_metric column must exist | `COLUMN_NOT_FOUND` |
 | ChatMessage | session must be completed | `INVESTIGATION_NOT_COMPLETE` |

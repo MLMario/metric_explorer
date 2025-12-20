@@ -70,10 +70,10 @@ Build an AI-powered metric investigation tool that enables data scientists to up
                                    │  ┌───────────────────────────────────────────┐   │
                                    │  │              STATE GRAPH                   │   │
                                    │  │                                           │   │
-                                   │  │  START → Schema → Plan → Hypothesize →   │   │
-                                   │  │         Analyze → [Decision] → Report    │   │
+                                   │  │  START → Schema → Metric Validate →      │   │
+                                   │  │        Hypothesize → [Memory Loop] → Report│  │
                                    │  │                      ↓                    │   │
-                                   │  │                  Iterate (max 2)          │   │
+                                   │  │              (max 15 iterations)          │   │
                                    │  └───────────────────────────────────────────┘   │
                                    │                                                   │
                                    │  ┌───────────────────────────────────────────┐   │
@@ -108,7 +108,7 @@ Build an AI-powered metric investigation tool that enables data scientists to up
 └──────────────────────────────────────────────────────────────────────────────────┘
 
 1. FORM SUBMISSION
-   Browser → [CSV Files + Descriptions + Context + SQL + Date Ranges] → Frontend
+   Browser → [CSV Files + Descriptions + Target Metric + Definition + Context + Date Ranges] → Frontend
    Frontend → POST /api/sessions/create → Backend (creates session directory)
    Frontend → POST /api/sessions/{id}/files → Backend (stores each file)
 
@@ -118,7 +118,7 @@ Build an AI-powered metric investigation tool that enables data scientists to up
    Backend → Invokes Agent with InvestigationState
 
 3. AGENT EXECUTION (detailed in Agent Design section)
-   Agent Graph executes: Schema → Plan → Hypothesize → Analyze → Report
+   Agent Graph executes: Schema → Metric ID → Hypothesize → Analyze → Report
    Agent writes artifacts to /sessions/{id}/ throughout execution
 
 4. REPORT DELIVERY
@@ -223,7 +223,7 @@ agent/
 │   ├── nodes/
 │   │   ├── __init__.py
 │   │   ├── schema_inference.py      # Infer column types & relationships
-│   │   ├── analysis_planner.py      # Create investigation plan
+│   │   ├── metric_identification.py # Validate metric columns exist in data
 │   │   ├── hypothesis_generator.py  # Generate potential explanations
 │   │   ├── analysis_execution.py    # Memory Loop: iterative code execution
 │   │   ├── memory_dump.py           # Dump findings to Supabase
@@ -235,6 +235,7 @@ agent/
 │   │   └── mcp_client.py            # MCP server connection & code execution
 │   ├── prompts/
 │   │   ├── schema_inference.txt
+│   │   ├── metric_identification.txt # (unused - pure Python validation)
 │   │   ├── hypothesis_generation.txt
 │   │   ├── analysis_decision.txt    # ANALYZE/DRILL_DOWN/PIVOT/CONCLUDE
 │   │   ├── compression.txt          # Compress raw output to 2-3 sentences
@@ -318,7 +319,8 @@ Lightweight Node.js server using Express, EJS templates, and HTMX for dynamic in
 │                                                                  │
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │ SECTION 2: Business Context                                │  │
-│  │ Metric Definition: [textarea - SQL or description]        │  │
+│  │ Target Metric Column: [text input] (e.g., "dau", "revenue")│  │
+│  │ Metric Definition: [textarea - how is metric calculated?] │  │
 │  │ Related Context: [textarea]                               │  │
 │  │ Baseline Period: [date] to [date]                         │  │
 │  │ Comparison Period: [date] to [date]                       │  │
@@ -389,7 +391,7 @@ FastAPI backend provides REST endpoints for session management, file handling, i
 | POST | `/api/sessions/{id}/files` | Upload file | `multipart/form-data` | `{file_id, name, rows}` |
 | PUT | `/api/sessions/{id}/files/{fid}` | Update description | `{description}` | `{success}` |
 | DELETE | `/api/sessions/{id}/files/{fid}` | Remove file | - | `{success}` |
-| POST | `/api/sessions/{id}/investigate` | Start investigation | `{context, sql, dates, prompt}` | `{status: "running"}` |
+| POST | `/api/sessions/{id}/investigate` | Start investigation | `{target_metric, metric_definition, context, dates, prompt}` | `{status: "running"}` |
 | GET | `/api/sessions/{id}/report` | Get report | - | `{content, format: "markdown"}` |
 | POST | `/api/sessions/{id}/chat` | Send Q&A | `{message}` | `{response}` |
 
@@ -459,10 +461,10 @@ sessions/{session_id}/
 ├── files/
 │   ├── {uuid}.csv             # Raw uploaded file
 │   └── {uuid}_meta.json       # {original_name, description, schema, row_count}
-├── context.json               # {business_context, metric_sql, dates, prompt}
+├── context.json               # {target_metric, metric_definition, business_context, dates, prompt}
 ├── analysis/
 │   ├── schema.json            # Inferred data model
-│   ├── plan.json              # Analysis plan
+│   ├── metric_requirements.json # Validated metric columns
 │   └── hypotheses/
 │       ├── hyp_001.json       # Individual hypothesis + validation result
 │       └── hyp_002.json
@@ -533,12 +535,20 @@ class Explanation(TypedDict):
     reasoning: str
     causal_story: str
 
+class MetricRequirements(TypedDict):
+    """Validation result from metric_identification node."""
+    target_metric: str  # The column name user wants to analyze
+    source_file: Optional[dict]  # {file_id, file_name} where column was found
+    validated: bool  # True if column was found
+    error_message: Optional[str]  # Error details if not validated
+
 class InvestigationState(TypedDict):
     # Input (set at start)
     session_id: str
     files: List[FileInfo]
     business_context: str
-    metric_sql: str
+    target_metric: str  # Column name to analyze (MUST exist in CSV)
+    metric_definition: str  # Text description of how metric is calculated (for LLM context)
     baseline_period: DateRange
     comparison_period: DateRange
     investigation_prompt: Optional[str]
@@ -547,8 +557,8 @@ class InvestigationState(TypedDict):
     data_model: Optional[dict]  # {tables, relationships}
     selected_dimensions: Optional[List[str]]
 
-    # Planning Output
-    analysis_plan: Optional[dict]
+    # Metric Identification Output
+    metric_requirements: Optional[MetricRequirements]
 
     # Hypothesis Generation Output
     hypotheses: Annotated[List[Hypothesis], add]
@@ -595,15 +605,25 @@ class InvestigationState(TypedDict):
                                      │
                                      ▼
                          ┌───────────────────────┐
-                         │   analysis_planner    │  Node 2
+                         │ metric_identification │  Node 2
                          │                       │
-                         │ • Review data model   │
                          │ • Parse metric SQL    │
-                         │ • Create investigation│
-                         │   plan                │
+                         │ • Find required cols  │
+                         │ • Validate all cols   │
+                         │   exist in files      │
                          └───────────┬───────────┘
                                      │
-                                     ▼
+                              ┌──────┴──────┐
+                              │             │
+                         validated?    NOT validated
+                              │             │
+                              ▼             ▼
+                         ┌─────────┐   ┌─────────┐
+                         │ continue│   │  ERROR  │
+                         │         │   │ (exit)  │
+                         └────┬────┘   └─────────┘
+                              │
+                              ▼
                          ┌───────────────────────┐
                          │ hypothesis_generator  │  Node 3
                          │                       │
@@ -667,7 +687,7 @@ class InvestigationState(TypedDict):
     │   │    ┌───────────────┐        │                 │                       │ │
     │   │    │ 4. COMPRESS   │        │                 │                       │ │
     │   │    │    RESULT     │        │                 │                       │ │
-    │   │    │ (2-3 sentences)│       │                 │                       │ │
+    │   │    │ (6-10 sentences)│       │                 │                       │ │
     │   │    └───────┬───────┘        │                 │                       │ │
     │   │            │                │                 │                       │ │
     │   │            ▼                │                 │                       │ │
@@ -761,37 +781,60 @@ Output JSON:
 
 ---
 
-#### Node 2: `analysis_planner`
+#### Node 2: `metric_identification`
 
-**Purpose**: Create a structured plan for investigating the metric.
+**Purpose**: Validate that the user-specified target metric column exists in the uploaded files.
 
-**Tools Used**: None (LLM reasoning only)
+**Tools Used**: None (pure Python logic - no LLM call needed)
 
-**LLM Prompt** (simplified):
+**Logic** (simplified Python):
+```python
+def metric_identification(state: InvestigationState) -> MetricRequirements:
+    target_metric = state.target_metric
+
+    # Search for target_metric column in all file schemas
+    for file in state.files:
+        if target_metric in file.schema["columns"]:
+            return MetricRequirements(
+                target_metric=target_metric,
+                source_file={"file_id": file.file_id, "file_name": file.name},
+                validated=True,
+                error_message=None
+            )
+
+    # Column not found - collect all available columns
+    all_columns = []
+    for file in state.files:
+        all_columns.extend([col["name"] for col in file.schema["columns"]])
+
+    return MetricRequirements(
+        target_metric=target_metric,
+        source_file=None,
+        validated=False,
+        error_message=f"Column '{target_metric}' not found in any uploaded file. "
+                      f"Available columns: {', '.join(sorted(set(all_columns)))}"
+    )
 ```
-Create an analysis plan for this metric investigation.
 
-Metric: {metric_sql}
-Context: {business_context}
-Data Model: {data_model}
-Dimensions: {selected_dimensions}
-Periods: {baseline} vs {comparison}
+**Conditional Exit**:
+- If `validated = true`: Proceed to `hypothesis_generator`
+- If `validated = false`: Set `state.status = "failed"` with error message, exit graph
 
-Plan must include:
-1. Initial Data Exploration steps
-2. Key hypotheses to investigate
-3. Evidence criteria for ranking explanations
-
-Output JSON plan.
+**Error Message Format**:
+```
+Column 'dau' not found in any uploaded file. Available columns:
+event_date, event_type, revenue, session_count, user_id
 ```
 
-**Output**: Updates `state.analysis_plan`
+**Output**: Updates `state.metric_requirements`
+
+**Key Simplification**: No LLM call required. This is a pure lookup operation - the user explicitly provides the column name, we just verify it exists.
 
 ---
 
 #### Node 3: `hypothesis_generator`
 
-**Purpose**: Generate potential explanations for the metric movement.
+**Purpose**: Generate potential explanations for the metric movement. This node serves as the implicit investigation planner - the generated hypotheses define what will be explored.
 
 **Tools Used**: None (LLM reasoning only)
 
@@ -799,10 +842,12 @@ Output JSON plan.
 ```
 Generate 5-7 hypotheses for why this metric changed.
 
-Metric Change: {observed_change}
+Target Metric: {target_metric}
+Metric Definition: {metric_definition}
+Source File: {metric_requirements.source_file}
 Context: {business_context}
 User Focus: {investigation_prompt}
-Available Dimensions: {dimensions}
+Available Dimensions: {selected_dimensions}
 
 Each hypothesis must have:
 - Unique ID
@@ -847,7 +892,8 @@ Each iteration:
 1. **Build Working Memory** (~6000 tokens):
 ```python
 working_memory = build_context(
-    objective=f"Investigate {state.metric_sql} change",
+    objective=f"Investigate why '{state.target_metric}' changed",
+    metric_definition=state.metric_definition,
     hypothesis_status={h.id: h.status for h in state.hypotheses},
     compressed_findings=state.findings_ledger[-10:],  # Last 10 findings
     last_result=state.iteration_logs[-1] if state.iteration_logs else None

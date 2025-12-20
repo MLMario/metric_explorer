@@ -233,7 +233,7 @@ paths:
       operationId: startInvestigation
       description: |
         Triggers the AI agent to analyze uploaded files and generate explanations.
-        Requires at least one file to be uploaded and metric SQL to be provided.
+        Requires at least one file to be uploaded and target metric to be provided.
       parameters:
         - $ref: '#/components/parameters/SessionId'
       requestBody:
@@ -262,12 +262,18 @@ paths:
                     error:
                       code: NO_FILES_UPLOADED
                       message: "At least one CSV file must be uploaded"
-                noMetricSql:
-                  summary: Missing metric definition
+                noTargetMetric:
+                  summary: Missing target metric
                   value:
                     error:
-                      code: METRIC_SQL_REQUIRED
-                      message: "Metric SQL or description is required"
+                      code: TARGET_METRIC_REQUIRED
+                      message: "Target metric column name is required"
+                columnNotFound:
+                  summary: Target metric column not found
+                  value:
+                    error:
+                      code: COLUMN_NOT_FOUND
+                      message: "Column 'dau' not found in any uploaded file"
                 invalidDates:
                   summary: Invalid date range
                   value:
@@ -514,20 +520,26 @@ components:
     InvestigationRequest:
       type: object
       required:
-        - metric_sql
+        - target_metric
+        - metric_definition
         - baseline_period
         - comparison_period
       properties:
+        target_metric:
+          type: string
+          maxLength: 100
+          description: Column name to analyze (must exist in uploaded CSV files)
+          example: "dau"
+        metric_definition:
+          type: string
+          maxLength: 2000
+          description: Text description of how the metric is calculated (for LLM context)
+          example: "DAU (Daily Active Users) is calculated as the count of distinct user_ids with at least one session_start event per day."
         business_context:
           type: string
           maxLength: 5000
           description: Background information about the metric and business context
           example: "DAU has been declining for the past week. We recently released a new onboarding flow on December 1st."
-        metric_sql:
-          type: string
-          maxLength: 2000
-          description: SQL query or text description defining the metric
-          example: "SELECT COUNT(DISTINCT user_id) as dau FROM user_activity WHERE event_type = 'session_start' GROUP BY date"
         baseline_period:
           $ref: '#/components/schemas/DateRange'
         comparison_period:

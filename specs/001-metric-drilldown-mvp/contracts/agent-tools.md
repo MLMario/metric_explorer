@@ -527,7 +527,8 @@ def build_working_memory(state: InvestigationState) -> str:
     """Build context for LLM decision (~6000 tokens budget)."""
     return f"""
 ## Objective
-{state['investigation_context']['metric_sql']}
+Investigate: {state['investigation_context']['target_metric']}
+Definition: {state['investigation_context']['metric_definition']}
 Period: {state['investigation_context']['baseline_period']} vs {state['investigation_context']['comparison_period']}
 
 ## Hypothesis Status
