@@ -5,23 +5,23 @@
 
 ## Overview
 
-This document defines the tool interfaces available to the AI Agent during investigation. The agent uses a **Memory Loop architecture** where:
+This document defines the tool interfaces available to the AI Agent during investigation. The agent uses a **Claude Agent SDK Orchestrator architecture** where:
 
 1. **Schema Inference** uses CSV tools to read file metadata locally
-2. **Analysis Execution** sends Python code to an external MCP server for sandboxed execution
-3. **Compression** summarizes raw outputs into memory-efficient findings
-4. **File Tools** manage session artifacts locally
+2. **Analysis Execution** uses Claude Agent SDK `query()` for iterative hypothesis investigation
+3. **File Tools** manage session artifacts and logs locally
+4. **Supabase MCP** retrieves uploaded files from Supabase storage
 
-The agent does NOT import pandas directly. All DataFrame operations run inside Docker containers via MCP.
+The Claude Agent SDK provides the iterative analysis capability - the agent writes Python scripts and executes them via native bash.
 
 ---
 
 ## Tool Categories
 
 1. **CSV Tools** - Read CSV file metadata and samples (local, for schema inference)
-2. **MCP Code Execution** - Execute Python code in Docker containers (external)
+2. **Claude Agent SDK** - Iterative hypothesis investigation via `query()`
 3. **File Tools** - Session artifact management (local)
-4. **Compression** - Summarize raw outputs for memory efficiency
+4. **Supabase MCP** - Retrieve files from Supabase storage
 
 ---
 
@@ -121,219 +121,198 @@ count = csv_tools.get_row_count("/sessions/abc123/files/events.csv")
 
 ---
 
-## MCP Code Execution
+## Claude Agent SDK
 
-The agent executes analysis code via an external MCP server running Docker containers. This provides sandboxed execution for dynamically generated Python code.
+The analysis execution node uses Claude Agent SDK `query()` to perform iterative hypothesis investigation. Each hypothesis gets its own `query()` call.
 
 ### Architecture
 
 ```
 ┌─────────────────┐         ┌─────────────────┐
-│    Agent        │  MCP    │  Docker MCP     │
-│   (LangGraph)   │ ──────► │    Server       │
-│                 │  stdio  │                 │
-│ - Generates code│◄─────── │ - pandas 2.x    │
-│ - Receives output         │ - numpy         │
-│                 │         │ - scipy         │
+│ Python          │         │ Claude Agent    │
+│ Orchestrator    │────────►│ SDK query()     │
+│                 │         │                 │
+│ - Picks hypo    │◄────────│ - Reads files   │
+│ - Captures logs │         │ - Writes scripts│
+│ - Updates ledger│         │ - Runs via bash │
 └─────────────────┘         └─────────────────┘
 ```
 
-### Connection
+### Configuration
 
-Uses existing Docker MCP server (e.g., official Anthropic MCP server for code execution).
-
-**Configuration**:
 ```python
-MCP_CONFIG = {
-    "transport": "stdio",  # or "http"
-    "server_url": "http://localhost:3000",  # if HTTP
-    "timeout_seconds": 60,
+from claude_agent_sdk import query, ClaudeAgentOptions
+
+ANALYSIS_CONFIG = {
+    "max_turns": 10,  # Max iterations per hypothesis
+    "allowed_tools": ["Read", "Write", "Bash", "Glob"],
+    "permission_mode": "acceptEdits",
+    "model": "claude-sonnet-4-20250514"
 }
 ```
 
 ---
 
-### `mcp_client.create_container`
+### `query()` - Hypothesis Investigation
 
-Create a persistent Docker container for the investigation session.
+Execute an iterative analysis session for a single hypothesis.
 
 **Signature**:
 ```python
-async def create_container(session_id: str) -> str
+async for message in query(
+    prompt: str,
+    options: ClaudeAgentOptions
+) -> AsyncIterator[Message]
 ```
 
 **Parameters**:
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `session_id` | `str` | Yes | Session ID for container naming |
+| `prompt` | `str` | Yes | Investigation prompt with hypothesis details |
+| `options` | `ClaudeAgentOptions` | Yes | Configuration for the session |
 
-**Returns**: `str` - Container ID for subsequent operations
+**ClaudeAgentOptions**:
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `allowed_tools` | `List[str]` | Tools the agent can use |
+| `system_prompt` | `str` | System instructions for the agent |
+| `cwd` | `str` | Working directory for file operations |
+| `max_turns` | `int` | Maximum iterations (default: 10) |
+| `permission_mode` | `str` | How to handle permissions |
 
-**Behavior**:
-- Creates Docker container with pre-installed packages (pandas, numpy, scipy)
-- Container persists across multiple code executions
-- Returns unique container ID
+**Message Types**:
+- `AssistantMessage`: Agent's reasoning and tool calls
+- `ToolResultBlock`: Output from tool execution
+- `ResultMessage`: Final result with metrics
 
 **Example**:
 ```python
-container_id = await mcp_client.create_container("abc123")
-# Returns: "mcp_container_abc123_1702850400"
+from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage
+
+async def investigate_hypothesis(session_path: str, hypothesis: Hypothesis):
+    prompt = f"""
+    Investigate this hypothesis about metric movement:
+
+    Hypothesis: {hypothesis.title}
+    Story: {hypothesis.causal_story}
+    Expected pattern: {hypothesis.expected_pattern}
+    Dimensions: {hypothesis.dimensions}
+
+    Available files in /analysis/files/
+
+    Either CONFIRM or RULE OUT this hypothesis with evidence.
+    """
+
+    session_log = []
+    result = None
+
+    async for message in query(
+        prompt=prompt,
+        options=ClaudeAgentOptions(
+            allowed_tools=["Read", "Write", "Bash", "Glob"],
+            system_prompt=ANALYSIS_SYSTEM_PROMPT,
+            cwd=session_path,
+            max_turns=10,
+            permission_mode="acceptEdits"
+        )
+    ):
+        session_log.append(message)
+
+        if isinstance(message, ResultMessage):
+            # Extract metrics from final message
+            result = {
+                "outcome": extract_outcome(message),  # CONFIRMED or RULED_OUT
+                "evidence": extract_evidence(message),
+                "duration_ms": message.duration_ms,
+                "turns": message.num_turns,
+                "total_tokens": message.total_tokens,
+                "cost_usd": message.total_cost_usd
+            }
+
+    return session_log, result
 ```
 
 ---
 
-### `mcp_client.upload_files`
+### Agent Tools (within query session)
 
-Upload CSV files to the container workspace before analysis.
+During `query()` execution, the agent has access to these Claude Code tools:
 
-**Signature**:
-```python
-async def upload_files(
-    container_id: str,
-    files: List[Dict[str, str]]
-) -> bool
-```
+| Tool | Purpose |
+|------|---------|
+| `Read` | Read files from session directory |
+| `Write` | Write Python scripts and logs |
+| `Bash` | Execute Python scripts via bash |
+| `Glob` | List files matching patterns |
 
-**Parameters**:
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `container_id` | `str` | Yes | Container ID from `create_container` |
-| `files` | `List[Dict]` | Yes | List of `{"local_path": str, "container_path": str}` |
+**Workflow**:
+1. Agent reads data files from `/analysis/files/`
+2. Agent writes Python script to `/analysis/scripts/NNN_description.py`
+3. Agent executes: `python /analysis/scripts/NNN_description.py`
+4. Agent interprets output and decides next action
+5. Agent writes session log to `/analysis/logs/`
+6. Repeat until CONFIRMED or RULED_OUT
 
-**Returns**: `bool` - True if all files uploaded successfully
+---
 
-**Example**:
-```python
-await mcp_client.upload_files(
-    container_id="mcp_container_abc123_1702850400",
-    files=[
-        {"local_path": "/sessions/abc123/files/events.csv", "container_path": "/workspace/events.csv"},
-        {"local_path": "/sessions/abc123/files/users.csv", "container_path": "/workspace/users.csv"}
-    ]
-)
+### System Prompt
+
+The analysis agent receives this system prompt:
+
+```markdown
+You are investigating a hypothesis about metric movement. Your goal is to either CONFIRM or RULE OUT this hypothesis through data analysis.
+
+## Your Task
+Hypothesis: {hypothesis.title}
+Story: {hypothesis.causal_story}
+Expected pattern if true: {hypothesis.expected_pattern}
+Dimensions to analyze: {hypothesis.dimensions}
+
+## Available Data
+Files in /analysis/files/: {file_list}
+Data schema: {schema_summary}
+
+## Your Process
+1. Write a Python script to analyze the relevant dimensions
+2. Save the script to /analysis/scripts/NNN_description.py
+3. Run the script using bash: `python /analysis/scripts/NNN_description.py`
+4. Interpret the results
+5. Repeat if you need more analysis
+6. Conclude with CONFIRMED or RULED_OUT
+
+## Logging Your Work
+As you work, write your reasoning to a markdown log file at:
+/analysis/logs/session_{hypothesis_id}_{timestamp}.md
+
+Use this format for each step:
+## [Timestamp] Step N: [Action Type]
+
+**What I did**: [description]
+**What I found**: [data/results]
+**My interpretation**: [what this means]
+**Decision**: [continue/pivot/conclude]
+**Reasoning**: [why this decision]
+
+## Conclusion Format
+When you're done, your final message must include:
+- OUTCOME: CONFIRMED or RULED_OUT
+- EVIDENCE: Key numbers that support your conclusion
+- CONFIDENCE: HIGH/MEDIUM/LOW
 ```
 
 ---
 
-### `mcp_client.execute_code`
+### Python Environment
 
-Execute Python code in the container and return output.
-
-**Signature**:
-```python
-async def execute_code(
-    container_id: str,
-    code: str
-) -> Dict[str, Any]
-```
-
-**Parameters**:
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `container_id` | `str` | Yes | Container ID |
-| `code` | `str` | Yes | Python code to execute |
-
-**Returns**:
-```python
-{
-    "success": bool,
-    "stdout": str,       # Standard output from code execution
-    "stderr": str,       # Standard error (if any)
-    "execution_time_ms": int
-}
-```
-
-**Behavior**:
-- Code has access to pandas, numpy, scipy
-- Files uploaded via `upload_files` are in `/workspace/`
-- Variables persist between executions in same container
-- Timeout after 60 seconds per execution
-
-**Example**:
-```python
-result = await mcp_client.execute_code(
-    container_id="mcp_container_abc123_1702850400",
-    code="""
-import pandas as pd
-
-df = pd.read_csv('/workspace/events.csv')
-baseline = df[(df['date'] >= '2025-11-24') & (df['date'] <= '2025-11-30')]
-comparison = df[(df['date'] >= '2025-12-01') & (df['date'] <= '2025-12-07')]
-
-baseline_dau = baseline.groupby('date')['user_id'].nunique().mean()
-comparison_dau = comparison.groupby('date')['user_id'].nunique().mean()
-
-print(f"Baseline DAU: {baseline_dau:.0f}")
-print(f"Comparison DAU: {comparison_dau:.0f}")
-print(f"Change: {(comparison_dau - baseline_dau) / baseline_dau * 100:.1f}%")
-"""
-)
-# Returns: {
-#   "success": True,
-#   "stdout": "Baseline DAU: 95000\\nComparison DAU: 87000\\nChange: -8.4%",
-#   "stderr": "",
-#   "execution_time_ms": 1250
-# }
-```
-
----
-
-### `mcp_client.list_workspace`
-
-List files in the container workspace.
-
-**Signature**:
-```python
-async def list_workspace(container_id: str) -> List[str]
-```
-
-**Parameters**:
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `container_id` | `str` | Yes | Container ID |
-
-**Returns**: `List[str]` - List of file paths in workspace
-
-**Example**:
-```python
-files = await mcp_client.list_workspace("mcp_container_abc123_1702850400")
-# Returns: ["/workspace/events.csv", "/workspace/users.csv"]
-```
-
----
-
-### `mcp_client.destroy_container`
-
-Cleanup container after analysis completes.
-
-**Signature**:
-```python
-async def destroy_container(container_id: str) -> bool
-```
-
-**Parameters**:
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `container_id` | `str` | Yes | Container ID to destroy |
-
-**Returns**: `bool` - True if destroyed successfully
-
-**Behavior**:
-- Removes container and all workspace data
-- Should be called after `memory_dump` node completes
-- Releases Docker resources
-
----
-
-### Pre-installed Packages
-
-The MCP container image includes:
+Scripts executed via bash have access to:
 
 | Package | Version | Purpose |
 |---------|---------|---------|
 | pandas | 2.x | DataFrame operations |
 | numpy | latest | Numerical computation |
 | scipy | latest | Statistical analysis |
+
+These packages must be installed in the agent runtime environment.
 
 ---
 
@@ -464,98 +443,103 @@ hypotheses = file_tools.list_artifacts(
 
 ---
 
-## Compression
+## Supabase MCP
 
-After each MCP code execution, raw output is compressed to a 2-3 sentence summary for memory efficiency.
+The Supabase MCP server retrieves uploaded files from Supabase storage before analysis begins.
 
-### `compression.summarize_output`
+### Purpose
 
-Compress raw code execution output to a concise finding summary.
+Users upload CSV files through the UI, which stores them in Supabase storage. Before analysis, the orchestrator uses the Supabase MCP to fetch these files and copy them to the local session directory.
+
+### Architecture
+
+```
+┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
+│ Python          │  MCP    │  Supabase MCP   │  HTTP   │   Supabase      │
+│ Orchestrator    │────────►│    Server       │────────►│   Storage       │
+│                 │         │                 │         │                 │
+│ - Session init  │◄────────│ - List files    │◄────────│ - CSV files     │
+│ - Copy files    │   files │ - Download      │  data   │ - Metadata      │
+└─────────────────┘         └─────────────────┘         └─────────────────┘
+```
+
+### MCP Server Selection
+
+**Task**: Research and select an established MCP server that can:
+1. Connect to Supabase storage
+2. List files by session ID
+3. Download files to local directories
+
+**Candidates**:
+- Official Supabase MCP server (if available)
+- Community MCP servers for Supabase/PostgreSQL
+- Generic file storage MCP servers
+
+---
+
+### `supabase_mcp.list_session_files`
+
+List all files uploaded for a session.
 
 **Signature**:
 ```python
-async def summarize_output(
-    raw_output: str,
-    hypothesis_context: str,
-    iteration: int
-) -> str
+async def list_session_files(session_id: str) -> List[Dict[str, str]]
 ```
 
-**Parameters**:
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `raw_output` | `str` | Yes | stdout from MCP code execution |
-| `hypothesis_context` | `str` | Yes | Current hypothesis being tested |
-| `iteration` | `int` | Yes | Current loop iteration number |
-
-**Returns**: `str` - 2-3 sentence summary (max 500 chars)
-
-**Behavior**:
-- Uses LLM to summarize raw output
-- Summary answers: What was tested? What numbers were found? What does it imply?
-- Separate LLM call from decision call
-
-**Example**:
+**Returns**:
 ```python
-summary = await compression.summarize_output(
-    raw_output="""
-    Baseline DAU: 95000
-    Comparison DAU: 87000
-    Change: -8.4%
-
-    By platform:
-    iOS: 45000 -> 38000 (-15.6%)
-    Android: 38000 -> 37500 (-1.3%)
-    Web: 12000 -> 11500 (-4.2%)
-    """,
-    hypothesis_context="Platform-specific issues causing DAU decline",
-    iteration=3
-)
-# Returns: "iOS DAU dropped 15.6% (45K→38K) while Android and Web stayed
-#           relatively flat (-1.3% and -4.2%). iOS accounts for ~87% of the
-#           total DAU decline, strongly supporting the hypothesis."
+[
+    {"file_id": "uuid", "name": "events.csv", "size_bytes": 1024000},
+    {"file_id": "uuid", "name": "users.csv", "size_bytes": 512000}
+]
 ```
 
 ---
 
-### Working Memory Assembly
+### `supabase_mcp.download_file`
 
-Each Memory Loop iteration assembles working memory from:
+Download a file from Supabase to local path.
 
+**Signature**:
 ```python
-def build_working_memory(state: InvestigationState) -> str:
-    """Build context for LLM decision (~6000 tokens budget)."""
-    return f"""
-## Objective
-Investigate: {state['investigation_context']['target_metric']}
-Definition: {state['investigation_context']['metric_definition']}
-Period: {state['investigation_context']['baseline_period']} vs {state['investigation_context']['comparison_period']}
-
-## Hypothesis Status
-{format_hypothesis_status(state['hypotheses'])}
-
-## Compressed Findings (Last 5)
-{format_findings(state['findings_ledger'][-5:])}
-
-## Last Execution Result
-{state['iteration_logs'][-1]['compressed_summary'] if state['iteration_logs'] else 'No previous execution'}
-
-## Available Data
-Files in workspace: {state['container_files']}
-Schema: {summarize_schema(state['data_model'])}
-"""
+async def download_file(
+    file_id: str,
+    destination_path: str
+) -> bool
 ```
-
-**Token Budget**:
-- Working memory: ~6000 tokens
-- Leaves room for LLM response with code
-- Old findings compressed to stay within budget
 
 ---
 
-### Memory Dump
+### Integration Pattern
 
-After analysis completes, all memory is compiled and stored in Supabase:
+```python
+async def retrieve_files_from_supabase(
+    session_id: str,
+    target_dir: str
+) -> List[str]:
+    """Fetch all session files from Supabase to local directory."""
+
+    # List files in Supabase for this session
+    files = await supabase_mcp.list_session_files(session_id)
+
+    downloaded = []
+    for file_info in files:
+        dest_path = f"{target_dir}/{file_info['name']}"
+        success = await supabase_mcp.download_file(
+            file_id=file_info['file_id'],
+            destination_path=dest_path
+        )
+        if success:
+            downloaded.append(dest_path)
+
+    return downloaded
+```
+
+---
+
+## Memory Dump
+
+After analysis completes, all memory is compiled and stored in Supabase for RAG retrieval:
 
 ```python
 async def dump_memory_to_supabase(
@@ -564,12 +548,15 @@ async def dump_memory_to_supabase(
 ) -> str:
     """Compile all analysis memory and store for RAG retrieval."""
 
+    session_path = get_session_path(session_id)
+    findings_ledger = read_findings_ledger(session_path)
+
     document = compile_memory_document(
         context=state['investigation_context'],
         data_model=state['data_model'],
         hypotheses=state['hypotheses'],
-        findings=state['findings_ledger'],
-        iterations=state['iteration_logs'],
+        findings=findings_ledger,
+        session_logs=state['session_logs'],
         report=state['report_content']
     )
 
@@ -611,37 +598,65 @@ ERROR_NO_HEADERS = "NO_HEADERS"
 ERROR_WRITE_FAILED = "WRITE_FAILED"
 ERROR_JSON_DECODE = "JSON_DECODE_ERROR"
 
-# MCP Errors
-ERROR_CONTAINER_CREATE_FAILED = "CONTAINER_CREATE_FAILED"
-ERROR_CONTAINER_NOT_FOUND = "CONTAINER_NOT_FOUND"
-ERROR_CODE_EXECUTION_FAILED = "CODE_EXECUTION_FAILED"
-ERROR_CODE_EXECUTION_TIMEOUT = "CODE_EXECUTION_TIMEOUT"
-ERROR_FILE_UPLOAD_FAILED = "FILE_UPLOAD_FAILED"
-ERROR_MCP_CONNECTION_FAILED = "MCP_CONNECTION_FAILED"
+# Claude Agent SDK Errors
+ERROR_QUERY_TIMEOUT = "QUERY_TIMEOUT"
+ERROR_MAX_TURNS_EXCEEDED = "MAX_TURNS_EXCEEDED"
+ERROR_TOOL_EXECUTION_FAILED = "TOOL_EXECUTION_FAILED"
 
-# Compression Errors
-ERROR_COMPRESSION_FAILED = "COMPRESSION_FAILED"
+# Supabase MCP Errors
+ERROR_FILE_DOWNLOAD_FAILED = "FILE_DOWNLOAD_FAILED"
+ERROR_MCP_CONNECTION_FAILED = "MCP_CONNECTION_FAILED"
+ERROR_SESSION_NOT_FOUND = "SESSION_NOT_FOUND"
+
+# Memory Errors
 ERROR_MEMORY_DUMP_FAILED = "MEMORY_DUMP_FAILED"
+ERROR_EMBEDDING_FAILED = "EMBEDDING_FAILED"
 ```
 
-### MCP Error Recovery
+### Claude Agent SDK Error Recovery
 
 ```python
-async def execute_with_retry(container_id: str, code: str, max_retries: int = 2) -> Dict:
-    """Execute code with retry on transient failures."""
+async def investigate_with_retry(
+    hypothesis: Hypothesis,
+    session_path: str,
+    max_retries: int = 2
+) -> Tuple[SessionLog, InvestigationResult]:
+    """Run hypothesis investigation with retry on transient failures."""
     for attempt in range(max_retries + 1):
         try:
-            result = await mcp_client.execute_code(container_id, code)
-            if result['success']:
-                return result
-            # Code error (not transient) - don't retry
-            if "SyntaxError" in result['stderr'] or "NameError" in result['stderr']:
-                return result
+            session_log, result = await run_hypothesis_investigation(
+                session_path=session_path,
+                hypothesis=hypothesis
+            )
+            return session_log, result
+        except QueryTimeoutError:
+            if attempt == max_retries:
+                raise
+            # Reduce max_turns for retry
+            hypothesis.max_turns = max(5, hypothesis.max_turns - 2)
+            await asyncio.sleep(1.0 * (attempt + 1))
+    raise ToolError(ERROR_QUERY_TIMEOUT, "Investigation failed after retries")
+```
+
+### Supabase MCP Error Recovery
+
+```python
+async def download_with_retry(
+    file_id: str,
+    destination_path: str,
+    max_retries: int = 2
+) -> bool:
+    """Download file with retry on transient failures."""
+    for attempt in range(max_retries + 1):
+        try:
+            success = await supabase_mcp.download_file(file_id, destination_path)
+            if success:
+                return True
         except MCPConnectionError:
             if attempt == max_retries:
                 raise
             await asyncio.sleep(1.0 * (attempt + 1))
-    return result
+    return False
 ```
 
 ---
@@ -653,13 +668,12 @@ async def execute_with_retry(container_id: str, code: str, max_retries: int = 2)
 | CSV | `csv_tools.get_headers` | Read column headers |
 | CSV | `csv_tools.sample_rows` | Get sample data for schema inference |
 | CSV | `csv_tools.get_row_count` | Count rows in file |
-| MCP | `mcp_client.create_container` | Create Docker container for session |
-| MCP | `mcp_client.upload_files` | Upload CSVs to container workspace |
-| MCP | `mcp_client.execute_code` | Run Python code in container |
-| MCP | `mcp_client.list_workspace` | List files in container |
-| MCP | `mcp_client.destroy_container` | Cleanup container |
+| Claude SDK | `query()` | Iterative hypothesis investigation |
+| Claude SDK | `ClaudeAgentOptions` | Configure investigation session |
+| Supabase MCP | `supabase_mcp.list_session_files` | List uploaded files for session |
+| Supabase MCP | `supabase_mcp.download_file` | Download file to local path |
 | File | `file_tools.write_json` | Write JSON artifacts |
 | File | `file_tools.read_json` | Read JSON artifacts |
 | File | `file_tools.write_markdown` | Write report |
 | File | `file_tools.list_artifacts` | List session artifacts |
-| Compression | `compression.summarize_output` | Compress raw output to finding |
+| Memory | `dump_memory_to_supabase` | Store memory document for RAG |

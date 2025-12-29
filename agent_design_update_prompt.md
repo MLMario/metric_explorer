@@ -24,7 +24,7 @@ Once research is done, plan how you are going to approach updating plan.md and r
 
 ### Overall Approach: 
 
-1) Keep langchain and AGENT STATE GRAPH as the main orchestrator of the agent flow. The main objective is to update the agent analysis node that currently implements a memory loop by replacing it with Claude Agent SDK query() supported by a file based memory system. This will require using a python orchestrator within the analysis node to be able to do analysis on all hypothesis, after this orchestrator is done, we will have the output files needed for the memory_dump node and then report_generator to do it's job. 
+Keep langchain and AGENT STATE GRAPH as the main orchestrator of the agent flow. The main objective is to update the agent analysis node that currently implements a memory loop by replacing it with Claude Agent SDK query() supported by a file based memory system. This will require using a python orchestrator within the analysis node to be able to do analysis on all hypothesis, after this orchestrator is done, we will have the output files needed for the memory_dump node and then report_generator to do it's job. 
 
 
 ### Analysis Node Design Details

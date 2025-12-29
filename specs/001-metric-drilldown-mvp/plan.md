@@ -10,7 +10,7 @@ Build an AI-powered metric investigation tool that enables data scientists to up
 ## Technical Context
 
 **Language/Version**: Python 3.11+ (Backend/Agent), Node.js 20+ (Frontend)
-**Primary Dependencies**: FastAPI, LangGraph, Anthropic Claude SDK, HTMX, MCP Client, Supabase-py
+**Primary Dependencies**: FastAPI, LangGraph, Claude Agent SDK, HTMX, Supabase MCP, Supabase-py
 **Storage**: File-based session storage (local), Supabase (memory documents for RAG)
 **Testing**: pytest (backend/agent), Vitest (frontend)
 **Target Platform**: Linux server (local-first, AWS-transferable)
@@ -36,8 +36,8 @@ Build an AI-powered metric investigation tool that enables data scientists to up
 - ✅ Frontend: Node.js with HTMX
 - ✅ Backend API: FastAPI (Python)
 - ✅ Database: Supabase (memory documents + RAG retrieval for Q&A)
-- ✅ Agent: LangGraph + Claude SDK (using LangChain's Anthropic integration)
-- ✅ Tools: Docker MCP server for code execution (required)
+- ✅ Agent: LangGraph + Claude Agent SDK (using query() for iterative analysis)
+- ✅ Tools: Supabase MCP for file retrieval, native bash for Python execution
 - ✅ LLM: Claude models exclusively
 
 ---
@@ -71,15 +71,17 @@ Build an AI-powered metric investigation tool that enables data scientists to up
                                    │  │              STATE GRAPH                   │   │
                                    │  │                                           │   │
                                    │  │  START → Schema → Metric Validate →      │   │
-                                   │  │        Hypothesize → [Memory Loop] → Report│  │
-                                   │  │                      ↓                    │   │
-                                   │  │              (max 15 iterations)          │   │
+                                   │  │        Hypothesize → Analysis → Report   │   │
+                                   │  │                       ↓                   │   │
+                                   │  │            Python Orchestrator Loop       │   │
+                                   │  │            (One query() per hypothesis)   │   │
                                    │  └───────────────────────────────────────────┘   │
                                    │                                                   │
                                    │  ┌───────────────────────────────────────────┐   │
-                                   │  │           MCP CODE EXECUTION               │   │
-                                   │  │  Docker container with pandas/numpy/scipy │   │
-                                   │  │  Agent generates code → MCP executes      │   │
+                                   │  │        CLAUDE AGENT SDK (query())          │   │
+                                   │  │  - Iterative analysis per hypothesis      │   │
+                                   │  │  - Writes Python scripts to /scripts/     │   │
+                                   │  │  - Executes via native bash               │   │
                                    │  └───────────────────────────────────────────┘   │
                                    └──────────────────────────┬────────────────────────┘
                                                               │
@@ -87,16 +89,16 @@ Build an AI-powered metric investigation tool that enables data scientists to up
                                           ▼                   ▼                   ▼
                                    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
                                    │   Claude    │    │   Session   │    │  Supabase   │
-                                   │     API     │    │   Storage   │    │  (Memory +  │
-                                   │ (Anthropic) │    │   (Files)   │    │   RAG)      │
+                                   │  Agent SDK  │    │   Storage   │    │  (Files +   │
+                                   │   query()   │    │   (Files)   │    │   RAG)      │
                                    └─────────────┘    └─────────────┘    └─────────────┘
                                                                                 │
                                                               ┌─────────────────┘
                                                               ▼
                                                        ┌─────────────┐
-                                                       │  Docker MCP │
+                                                       │ Supabase MCP│
                                                        │   Server    │
-                                                       │  (External) │
+                                                       │(File Export)│
                                                        └─────────────┘
 ```
 
@@ -127,9 +129,8 @@ Build an AI-powered metric investigation tool that enables data scientists to up
    Frontend → Renders markdown in report view + enables chat panel
 
 5. MEMORY DUMP (after analysis completes)
-   Agent → Compiles all findings, iterations, reasoning into memory document
+   Agent → Compiles all findings from findings_ledger.json into memory document
    Agent → Stores memory document in Supabase with embeddings
-   MCP Container → Destroyed after memory dump complete
 
 6. Q&A FLOW (uses RAG retrieval from Supabase)
    Browser → Chat message → Frontend
@@ -261,19 +262,23 @@ shared/
 sessions/                            # Runtime session storage (gitignored)
 ├── {session_id}/
 │   ├── metadata.json
+│   ├── context.json                 # Investigation context from form
 │   ├── files/
 │   │   ├── {file_id}.csv
 │   │   └── {file_id}_meta.json
 │   ├── analysis/
-│   │   ├── schema.json
-│   │   ├── plan.json
-│   │   ├── hypotheses/
-│   │   │   └── hyp_NNN.json         # Hypothesis with status
-│   │   ├── findings_ledger.json     # Compressed findings list
-│   │   ├── iterations/
-│   │   │   └── iter_NNN.json        # Full iteration log
-│   │   └── full_outputs/
-│   │       └── output_NNN.txt       # Raw MCP execution output
+│   │   ├── progress.txt             # High-level investigation log
+│   │   ├── hypotheses.json          # All hypotheses with status
+│   │   ├── schema.json              # Inferred data model
+│   │   ├── metric_requirements.json
+│   │   ├── scripts/                 # Python scripts written by agent
+│   │   │   └── NNN_description.py
+│   │   ├── logs/                    # Per-hypothesis session logs
+│   │   │   ├── session_H1_*.md      # Human-readable session log
+│   │   │   └── session_H1_*.json    # Structured session summary
+│   │   ├── artifacts/               # Analysis outputs (CSVs, charts)
+│   │   │   └── output_*.csv
+│   │   └── findings_ledger.json     # Incrementally built findings
 │   ├── results/
 │   │   └── explanations.json
 │   ├── report.md
@@ -510,22 +515,28 @@ class Hypothesis(TypedDict):
     status: Literal["PENDING", "INVESTIGATING", "CONFIRMED", "RULED_OUT"]
 
 class Finding(TypedDict):
-    """Compressed finding from a single analysis iteration."""
+    """Finding from a completed hypothesis investigation."""
     finding_id: str
-    iteration: int
-    summary: str  # 2-3 sentence compressed summary
-    full_output_ref: str  # Path to raw output file
-    hypothesis_affected: str  # Which hypothesis this relates to
-    created_at: str
+    hypothesis_id: str
+    outcome: Literal["CONFIRMED", "RULED_OUT"]
+    evidence: str  # Key evidence supporting the conclusion
+    confidence: Literal["HIGH", "MEDIUM", "LOW"]
+    key_metrics: List[str]  # Key numbers discovered
+    session_log_ref: str  # Path to session log JSON
+    completed_at: str
 
-class IterationLog(TypedDict):
-    """Full log of a single memory loop iteration."""
-    iteration: int
-    decision: Literal["ANALYZE", "DRILL_DOWN", "PIVOT", "CONCLUDE"]
-    code_executed: str  # Python code sent to MCP
-    raw_output: str  # stdout/stderr from execution
-    compressed_summary: str  # Finding summary
-    hypothesis_status_changes: dict  # {hyp_id: new_status}
+class SessionLog(TypedDict):
+    """Log of a single hypothesis investigation session."""
+    hypothesis_id: str
+    start_time: str
+    end_time: str
+    outcome: Literal["CONFIRMED", "RULED_OUT"]
+    turns: int  # Number of query() turns
+    total_tokens: int
+    cost_usd: float
+    key_findings: List[str]
+    scripts_created: List[str]
+    artifacts_created: List[str]
 
 class Explanation(TypedDict):
     rank: int
@@ -563,12 +574,9 @@ class InvestigationState(TypedDict):
     # Hypothesis Generation Output
     hypotheses: Annotated[List[Hypothesis], add]
 
-    # Memory Loop State (analysis_execution node)
-    container_id: Optional[str]  # MCP container reference
-    findings_ledger: Annotated[List[Finding], add]  # Compressed findings
-    iteration_logs: Annotated[List[IterationLog], add]  # Full iteration history
-    loop_iteration: int  # Current loop count (0-15)
-    stall_count: int  # Consecutive similar outputs
+    # Analysis Execution Output (Python orchestrator + Claude Agent SDK)
+    findings_ledger: Annotated[List[Finding], add]  # Findings per hypothesis
+    session_logs: Annotated[List[SessionLog], add]  # Session logs per hypothesis
 
     # Final Output
     explanations: Optional[List[Explanation]]
@@ -585,7 +593,7 @@ class InvestigationState(TypedDict):
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │                         AGENT STATE GRAPH (LangGraph)                            │
-│                         with Memory Loop Architecture                            │
+│                   with Claude Agent SDK Orchestrator Architecture                │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
                               ┌─────────────┐
@@ -607,10 +615,9 @@ class InvestigationState(TypedDict):
                          ┌───────────────────────┐
                          │ metric_identification │  Node 2
                          │                       │
-                         │ • Parse metric SQL    │
-                         │ • Find required cols  │
-                         │ • Validate all cols   │
-                         │   exist in files      │
+                         │ • Validate target     │
+                         │   metric column       │
+                         │   exists in files     │
                          └───────────┬───────────┘
                                      │
                               ┌──────┴──────┐
@@ -636,76 +643,48 @@ class InvestigationState(TypedDict):
                                      ▼
     ┌────────────────────────────────────────────────────────────────────────────┐
     │                     ANALYSIS_EXECUTION NODE (Node 4)                        │
-    │                         Memory Loop Architecture                            │
+    │               Python Orchestrator + Claude Agent SDK query()                │
     ├────────────────────────────────────────────────────────────────────────────┤
     │                                                                             │
-    │   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐                  │
-    │   │  INITIALIZE │────►│ MCP Create  │────►│ Upload CSVs │                  │
-    │   │             │     │ Container   │     │ to Container│                  │
-    │   └─────────────┘     └─────────────┘     └──────┬──────┘                  │
-    │                                                   │                         │
-    │                              ┌────────────────────┘                         │
-    │                              ▼                                              │
-    │   ┌──────────────────────────────────────────────────────────────────────┐ │
-    │   │                    MEMORY LOOP (max 15 iterations)                    │ │
-    │   │                                                                       │ │
-    │   │    ┌───────────────────────────────────────────────────────────┐     │ │
-    │   │    │ 1. BUILD WORKING MEMORY (~6000 tokens)                    │     │ │
-    │   │    │    • Objective: metric, question, hypothesis status       │     │ │
-    │   │    │    • Compressed findings from ledger                      │     │ │
-    │   │    │    • Last execution result                                │     │ │
-    │   │    └───────────────────────────┬───────────────────────────────┘     │ │
-    │   │                                │                                      │ │
-    │   │                                ▼                                      │ │
-    │   │    ┌───────────────────────────────────────────────────────────┐     │ │
-    │   │    │ 2. LLM DECISION                                           │     │ │
-    │   │    │    Output: {decision, code, hypothesis_updates}           │     │ │
-    │   │    │    Decisions:                                             │     │ │
-    │   │    │    • ANALYZE: Run code to test hypothesis                 │     │ │
-    │   │    │    • DRILL_DOWN: Deeper analysis on promising segment     │     │ │
-    │   │    │    • PIVOT: Try different angle, new hypothesis           │     │ │
-    │   │    │    • CONCLUDE: Sufficient evidence gathered               │     │ │
-    │   │    └───────────────────────────┬───────────────────────────────┘     │ │
-    │   │                                │                                      │ │
-    │   │              ┌─────────────────┼─────────────────┐                    │ │
-    │   │              ▼                 ▼                 ▼                    │ │
-    │   │    ┌─────────────┐   ┌─────────────┐   ┌─────────────┐               │ │
-    │   │    │  ANALYZE/   │   │  CONCLUDE   │   │ EXIT (max   │               │ │
-    │   │    │  DRILL_DOWN/│   │             │   │ iter/stall) │               │ │
-    │   │    │  PIVOT      │   └──────┬──────┘   └──────┬──────┘               │ │
-    │   │    └──────┬──────┘          │                 │                       │ │
-    │   │           │                 │                 │                       │ │
-    │   │           ▼                 │                 │                       │ │
-    │   │    ┌───────────────┐        │                 │                       │ │
-    │   │    │ 3. EXECUTE    │        │                 │                       │ │
-    │   │    │    CODE       │        │                 │                       │ │
-    │   │    │ via MCP Server│        │                 │                       │ │
-    │   │    │ (pandas/numpy)│        │                 │                       │ │
-    │   │    └───────┬───────┘        │                 │                       │ │
-    │   │            │                │                 │                       │ │
-    │   │            ▼                │                 │                       │ │
-    │   │    ┌───────────────┐        │                 │                       │ │
-    │   │    │ 4. COMPRESS   │        │                 │                       │ │
-    │   │    │    RESULT     │        │                 │                       │ │
-    │   │    │ (6-10 sentences)│       │                 │                       │ │
-    │   │    └───────┬───────┘        │                 │                       │ │
-    │   │            │                │                 │                       │ │
-    │   │            ▼                │                 │                       │ │
-    │   │    ┌───────────────┐        │                 │                       │ │
-    │   │    │ 5. UPDATE     │        │                 │                       │ │
-    │   │    │ • findings_ledger     │                 │                       │ │
-    │   │    │ • hypothesis status   │                 │                       │ │
-    │   │    │ • stall detection     │                 │                       │ │
-    │   │    └───────┬───────┘        │                 │                       │ │
-    │   │            │                │                 │                       │ │
-    │   │            └────────────────┼─────────────────┤                       │ │
-    │   │                   LOOP      │                 │                       │ │
-    │   └─────────────────────────────┼─────────────────┼───────────────────────┘ │
-    │                                 │                 │                         │
-    │                                 ▼                 ▼                         │
-    │                          ┌─────────────────────────────┐                   │
-    │                          │ CLEANUP: Destroy Container  │                   │
-    │                          └─────────────────────────────┘                   │
+    │   ┌─────────────────────────────────────────────────────────────────────┐  │
+    │   │                    PYTHON ORCHESTRATOR LOOP                          │  │
+    │   │                                                                      │  │
+    │   │    ┌───────────────────────────────────────────────────────────┐    │  │
+    │   │    │ 1. INITIALIZE                                             │    │  │
+    │   │    │    • Fetch files from Supabase via MCP                   │    │  │
+    │   │    │    • Write hypotheses.json                               │    │  │
+    │   │    │    • Initialize progress.txt                             │    │  │
+    │   │    │    • Initialize findings_ledger.json                     │    │  │
+    │   │    └───────────────────────────┬───────────────────────────────┘    │  │
+    │   │                                │                                     │  │
+    │   │                                ▼                                     │  │
+    │   │    ┌───────────────────────────────────────────────────────────┐    │  │
+    │   │    │ 2. FOR EACH PENDING HYPOTHESIS:                           │    │  │
+    │   │    │    ┌─────────────────────────────────────────────────┐   │    │  │
+    │   │    │    │ a. Update status → INVESTIGATING                │   │    │  │
+    │   │    │    │ b. Log to progress.txt                          │   │    │  │
+    │   │    │    │                                                 │   │    │  │
+    │   │    │    │ c. Call query() with Claude Agent SDK:          │   │    │  │
+    │   │    │    │    ┌────────────────────────────────────────┐  │   │    │  │
+    │   │    │    │    │ CLAUDE AGENT SDK SESSION               │  │   │    │  │
+    │   │    │    │    │ • Reads data files                     │  │   │    │  │
+    │   │    │    │    │ • Writes Python scripts to /scripts/   │  │   │    │  │
+    │   │    │    │    │ • Executes via native bash             │  │   │    │  │
+    │   │    │    │    │ • Writes session log to /logs/         │  │   │    │  │
+    │   │    │    │    │ • Iterates until CONFIRMED/RULED_OUT   │  │   │    │  │
+    │   │    │    │    └────────────────────────────────────────┘  │   │    │  │
+    │   │    │    │                                                 │   │    │  │
+    │   │    │    │ d. Capture session result                       │   │    │  │
+    │   │    │    │ e. Update hypothesis status                     │   │    │  │
+    │   │    │    │ f. Add to findings_ledger.json (incremental)   │   │    │  │
+    │   │    │    │ g. Save session log JSON                        │   │    │  │
+    │   │    │    │ h. Log completion to progress.txt               │   │    │  │
+    │   │    │    └─────────────────────────────────────────────────┘   │    │  │
+    │   │    │                                                           │    │  │
+    │   │    │    REPEAT for each hypothesis                            │    │  │
+    │   │    └───────────────────────────────────────────────────────────┘    │  │
+    │   │                                                                      │  │
+    │   └─────────────────────────────────────────────────────────────────────┘  │
     │                                                                             │
     └───────────────────────────────────┬─────────────────────────────────────────┘
                                         │
@@ -713,7 +692,7 @@ class InvestigationState(TypedDict):
                          ┌───────────────────────┐
                          │     memory_dump       │  Node 5
                          │                       │
-                         │ • Compile findings    │
+                         │ • Read findings_ledger│
                          │ • Store in Supabase   │
                          │ • Generate embeddings │
                          │   for RAG retrieval   │
@@ -735,14 +714,14 @@ class InvestigationState(TypedDict):
                               └─────────────┘
 ```
 
-### Memory Loop Configuration
+### Analysis Execution Configuration
 
 ```python
-MEMORY_LOOP_CONFIG = {
-    "max_iterations": 15,           # Maximum loop iterations
-    "stall_threshold": 3,           # Consecutive similar outputs before exit
-    "working_memory_budget": 6000,  # Approximate tokens per iteration
-    "compression_model": "claude-sonnet-4-20250514",  # Same as decision model
+ANALYSIS_CONFIG = {
+    "max_turns_per_hypothesis": 10,  # Max query() iterations per hypothesis
+    "model": "claude-sonnet-4-20250514",
+    "allowed_tools": ["Read", "Write", "Bash", "Glob"],
+    "permission_mode": "acceptEdits",
 }
 ```
 
@@ -865,105 +844,133 @@ Output JSON array of hypotheses.
 
 ---
 
-#### Node 4: `analysis_execution` (Memory Loop)
+#### Node 4: `analysis_execution` (Python Orchestrator + Claude Agent SDK)
 
-**Purpose**: Iteratively analyze data to validate/invalidate hypotheses using MCP code execution.
+**Purpose**: Iteratively analyze data to validate/invalidate hypotheses using Claude Agent SDK `query()` calls.
 
-**Architecture**: Internal loop with bounded context (see diagram above).
+**Architecture**: Python orchestrator loop that calls `query()` once per hypothesis.
 
 **Phase 1: Initialize**
 ```python
-# Create MCP container
-container_id = mcp_client.create_container(session_id)
+session_path = get_session_path(state.session_id)
 
-# Upload CSV files to container workspace
-for file in state.files:
-    mcp_client.upload_file(container_id, file.path)
-
-state.container_id = container_id
-state.loop_iteration = 0
-state.stall_count = 0
-```
-
-**Phase 2: Memory Loop** (up to 15 iterations)
-
-Each iteration:
-
-1. **Build Working Memory** (~6000 tokens):
-```python
-working_memory = build_context(
-    objective=f"Investigate why '{state.target_metric}' changed",
-    metric_definition=state.metric_definition,
-    hypothesis_status={h.id: h.status for h in state.hypotheses},
-    compressed_findings=state.findings_ledger[-10:],  # Last 10 findings
-    last_result=state.iteration_logs[-1] if state.iteration_logs else None
-)
-```
-
-2. **LLM Decision**:
-```python
-decision_prompt = ANALYSIS_DECISION_PROMPT.format(
-    working_memory=working_memory,
-    available_files=list_container_files(container_id)
+# Fetch files from Supabase via MCP
+await retrieve_files_from_supabase(
+    session_id=state.session_id,
+    target_dir=f"{session_path}/analysis/files/"
 )
 
-response = llm.generate(decision_prompt)
-# Returns: {decision, code, hypothesis_updates, reasoning}
+# Initialize file-based memory
+initialize_analysis_directory(session_path)
+write_hypotheses_json(session_path, state.hypotheses)
+write_progress_log(session_path, "Investigation started")
+initialize_findings_ledger(session_path)
 ```
 
-3. **Execute Code** (for ANALYZE/DRILL_DOWN/PIVOT):
+**Phase 2: Hypothesis Investigation Loop**
+
+For each PENDING hypothesis:
+
 ```python
-if response.decision != "CONCLUDE":
-    result = mcp_client.execute_code(container_id, response.code)
-    # result: {stdout, stderr, success}
+for hypothesis in state.hypotheses:
+    if hypothesis.status != "PENDING":
+        continue
+
+    # Update status
+    hypothesis.status = "INVESTIGATING"
+    write_hypotheses_json(session_path, state.hypotheses)
+    write_progress_log(session_path, f"Investigating: {hypothesis.title}")
+
+    # Build investigation prompt
+    prompt = build_investigation_prompt(
+        hypothesis=hypothesis,
+        context=state.investigation_context,
+        data_model=state.data_model,
+        file_list=list_analysis_files(session_path)
+    )
+
+    # Call Claude Agent SDK
+    session_log = SessionLog(hypothesis_id=hypothesis.id, start_time=now())
+
+    async for message in query(
+        prompt=prompt,
+        options=ClaudeAgentOptions(
+            allowed_tools=["Read", "Write", "Bash", "Glob"],
+            system_prompt=ANALYSIS_SYSTEM_PROMPT,
+            cwd=session_path,
+            max_turns=10
+        )
+    ):
+        session_log.messages.append(message)
+
+        if isinstance(message, ResultMessage):
+            result = parse_investigation_result(message)
+            session_log.outcome = result.outcome
+            session_log.end_time = now()
+
+    # Update hypothesis
+    hypothesis.status = result.outcome  # CONFIRMED or RULED_OUT
+    hypothesis.evidence = result.evidence
+
+    # Save logs and update ledger (incrementally)
+    save_session_log(session_path, hypothesis.id, session_log)
+    add_finding_to_ledger(session_path, Finding(
+        finding_id=f"F{len(state.findings_ledger) + 1}",
+        hypothesis_id=hypothesis.id,
+        outcome=result.outcome,
+        evidence=result.evidence,
+        confidence=result.confidence,
+        key_metrics=result.key_metrics,
+        session_log_ref=f"logs/session_{hypothesis.id}_{timestamp}.json",
+        completed_at=now()
+    ))
+
+    write_progress_log(session_path, f"Completed: {hypothesis.title} → {result.outcome}")
 ```
 
-4. **Compress Result**:
-```python
-compressed = llm.generate(COMPRESSION_PROMPT.format(
-    code=response.code,
-    output=result.stdout,
-    hypothesis=current_hypothesis
-))
-# Returns: 2-3 sentence summary of what was learned
+**System Prompt for Analysis Agent**:
+```markdown
+You are investigating a hypothesis about metric movement. Your goal is to either CONFIRM or RULE OUT this hypothesis through data analysis.
+
+## Your Task
+Hypothesis: {hypothesis.title}
+Story: {hypothesis.causal_story}
+Expected pattern if true: {hypothesis.expected_pattern}
+Dimensions to analyze: {hypothesis.dimensions}
+
+## Available Data
+Files in /analysis/files/: {file_list}
+Data schema: {schema_summary}
+
+## Your Process
+1. Write a Python script to analyze the relevant dimensions
+2. Save the script to /analysis/scripts/NNN_description.py
+3. Run the script using bash: `python /analysis/scripts/NNN_description.py`
+4. Interpret the results
+5. Repeat if you need more analysis
+6. Conclude with CONFIRMED or RULED_OUT
+
+## Logging Your Work
+As you work, write your reasoning to a markdown log file at:
+/analysis/logs/session_{hypothesis_id}_{timestamp}.md
+
+Use this format for each step:
+## [Timestamp] Step N: [Action Type]
+
+**What I did**: [description]
+**What I found**: [data/results]
+**My interpretation**: [what this means]
+**Decision**: [continue/pivot/conclude]
+**Reasoning**: [why this decision]
+
+## Conclusion Format
+When you're done, your final message must include:
+- OUTCOME: CONFIRMED or RULED_OUT
+- EVIDENCE: Key numbers that support your conclusion
+- CONFIDENCE: HIGH/MEDIUM/LOW
 ```
 
-5. **Update State**:
-```python
-# Add finding to ledger
-state.findings_ledger.append(Finding(
-    finding_id=f"find_{state.loop_iteration}",
-    iteration=state.loop_iteration,
-    summary=compressed,
-    full_output_ref=save_full_output(result),
-    hypothesis_affected=response.hypothesis_updates.get("id")
-))
-
-# Update hypothesis statuses
-for hyp_id, new_status in response.hypothesis_updates.items():
-    update_hypothesis_status(state, hyp_id, new_status)
-
-# Stall detection
-if is_similar_to_previous(compressed, state.findings_ledger):
-    state.stall_count += 1
-else:
-    state.stall_count = 0
-
-state.loop_iteration += 1
-```
-
-**Exit Conditions**:
-- `response.decision == "CONCLUDE"`
-- `state.loop_iteration >= 15`
-- `state.stall_count >= 3`
-
-**Phase 3: Cleanup**
-```python
-mcp_client.destroy_container(container_id)
-state.container_id = None
-```
-
-**Output**: Updates `state.findings_ledger`, `state.iteration_logs`, hypothesis statuses
+**Output**: Updates `state.hypotheses`, `state.findings_ledger`, `state.session_logs`
 
 ---
 
@@ -973,10 +980,15 @@ state.container_id = None
 
 **Logic**:
 ```python
+session_path = get_session_path(state.session_id)
+
+# Read findings from file-based memory
+findings_ledger = read_findings_ledger(session_path)
+
 # Compile full memory document
 memory_document = compile_memory_document(
-    findings=state.findings_ledger,
-    iterations=state.iteration_logs,
+    findings=findings_ledger,
+    session_logs=state.session_logs,
     hypotheses=state.hypotheses,
     schema=state.data_model,
     report_summary=generate_summary(state)

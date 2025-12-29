@@ -19,11 +19,11 @@ This document captures technology decisions, library choices, and rationale for 
 | Frontend Templates | EJS | 3.x | Simple, no build step, server-side rendering |
 | Backend Framework | FastAPI | 0.109+ | Constitution requires FastAPI; async, Pydantic |
 | Backend Validation | Pydantic | 2.x | Built into FastAPI; strict type validation |
-| Agent Framework | LangGraph | 0.2+ | Graph-based agent with Memory Loop architecture |
-| LLM SDK | Anthropic | 0.40+ | Constitution requires Claude SDK |
+| Agent Framework | LangGraph | 0.2+ | Graph-based agent orchestrator |
+| LLM SDK | Claude Agent SDK | 1.x | Claude Agent SDK for iterative analysis via query() |
 | LangChain Integration | langchain-anthropic | 0.2+ | LangGraph + Claude integration |
-| MCP Client | mcp | 1.x | Code execution in Docker containers |
-| Code Execution | Docker MCP Server | - | External server for sandboxed pandas/numpy execution |
+| MCP Server | Supabase MCP | - | File retrieval from Supabase storage |
+| Code Execution | Native bash | - | Python scripts executed via bash (no container) |
 | Markdown Rendering | marked (frontend) | 9.x | Browser-side markdown rendering |
 | Testing (Python) | pytest | 8.x | Standard Python testing; fixtures, async support |
 | Testing (Node) | Vitest | 1.x | Fast, ESM-native, minimal config |
@@ -101,15 +101,15 @@ This document captures technology decisions, library choices, and rationale for 
 ### Agent Dependencies
 
 #### LangGraph (v0.2+)
-**Purpose**: Agent workflow orchestration with Memory Loop
-**Why**: Graph-based state machine with internal loops for iterative analysis. The `analysis_execution` node runs an internal Memory Loop (up to 15 iterations) while the outer graph remains linear.
+**Purpose**: Agent workflow orchestration with Python orchestrator
+**Why**: Graph-based state machine for sequencing investigation phases. The `analysis_execution` node uses a Python orchestrator loop that calls Claude Agent SDK `query()` once per hypothesis.
 **Key Features Used**:
 - `StateGraph`: Define nodes and edges
-- `TypedDict` state: Typed investigation state with memory fields
-- No external conditional edges needed (loop is internal to node)
+- `TypedDict` state: Typed investigation state
+- Linear graph with analysis handled by Claude Agent SDK
 
 **Alternative Rejected**:
-- LangChain LCEL: Linear chains don't support internal loops
+- LangChain LCEL: Less flexible for complex state management
 - CrewAI: Multi-agent overkill; single agent sufficient
 - AutoGen: Conversation-based; not suited for structured analysis
 
@@ -132,21 +132,36 @@ llm = ChatAnthropic(
 **Why**: Native SDK; `langchain-anthropic` uses this under the hood.
 **Usage**: Direct calls for compression prompts.
 
-#### MCP Client (mcp v1.x)
-**Purpose**: Connect to Docker MCP Server for code execution
-**Why**: Agent generates Python code dynamically; MCP provides sandboxed execution.
-**Key Operations**:
-- `create_container(session_id)`: Create session-scoped container
-- `upload_file(container_id, path)`: Upload CSVs to container
-- `execute_code(container_id, code)`: Run Python, get stdout/stderr
-- `destroy_container(container_id)`: Cleanup after analysis
+#### Claude Agent SDK (v1.x)
+**Purpose**: Iterative analysis within hypothesis investigation sessions
+**Why**: Provides `query()` function that handles the agentic loop internally. Each hypothesis gets its own `query()` call, which iterates until the agent reaches a conclusion.
+**Key Features Used**:
+- `query()`: Async generator that yields messages as agent works
+- `ClaudeAgentOptions`: Configure allowed tools, max turns, working directory
+- `ResultMessage`: Final result with metrics (duration, tokens, cost)
 
-**Container Pre-installed Packages** (in Docker MCP Server):
-- pandas 2.x
-- numpy
-- scipy
+**Configuration**:
+```python
+from claude_agent_sdk import query, ClaudeAgentOptions
 
-**Note**: pandas is NOT imported in our agent code. It runs inside the MCP container.
+async for message in query(
+    prompt=hypothesis_prompt,
+    options=ClaudeAgentOptions(
+        allowed_tools=["Read", "Write", "Bash", "Glob"],
+        system_prompt=ANALYSIS_SYSTEM_PROMPT,
+        cwd=session_path,
+        max_turns=10,
+        permission_mode="acceptEdits"
+    )
+):
+    # Process streamed messages
+    pass
+```
+
+**Python Execution**:
+- Agent writes scripts to `/analysis/scripts/` directory
+- Executes via native bash: `python scripts/001_analysis.py`
+- Required packages (pandas, numpy, scipy) installed in agent environment
 
 #### supabase-py (v2.x)
 **Purpose**: Supabase client for memory storage and RAG retrieval
@@ -191,14 +206,19 @@ llm = ChatAnthropic(
 ```
 sessions/{uuid}/
 ├── metadata.json      # Session status, timestamps
+├── context.json       # Investigation context from form
 ├── files/             # Uploaded CSVs + metadata
 ├── analysis/
+│   ├── progress.txt   # High-level investigation log
+│   ├── hypotheses.json  # All hypotheses with status
 │   ├── schema.json    # Inferred data model
-│   ├── plan.json      # Investigation plan
-│   ├── hypotheses/    # Hypothesis files with status
-│   ├── findings_ledger.json  # Compressed findings
-│   ├── iterations/    # Full iteration logs
-│   └── full_outputs/  # Raw MCP execution outputs
+│   ├── metric_requirements.json
+│   ├── scripts/       # Python scripts written by agent
+│   ├── logs/          # Per-hypothesis session logs
+│   │   ├── session_H1_*.md   # Human-readable log
+│   │   └── session_H1_*.json # Structured summary
+│   ├── artifacts/     # Analysis outputs (CSVs, charts)
+│   └── findings_ledger.json  # Incrementally built findings
 ├── results/           # Final explanations
 ├── report.md          # Final output
 └── chat/              # Q&A history (local)
@@ -220,14 +240,34 @@ sessions/{uuid}/
 - User accounts (explicitly non-goal per Constitution)
 - Investigation history across sessions
 
-### Docker MCP Server
+### Supabase MCP Server
 
-**Decision**: Required external service for code execution
-**Why**: Agent generates Python code dynamically; needs sandboxed execution environment.
+**Decision**: Required for file retrieval from Supabase storage
+**Why**: Users upload CSV files through the UI, which stores them in Supabase. The agent needs to retrieve these files before analysis.
 
-**Connection**: Uses existing Docker MCP server (e.g., official Anthropic MCP server)
-**Container Lifecycle**: Created at start of `analysis_execution`, destroyed after `memory_dump`
-**Pre-installed**: pandas, numpy, scipy in container image
+**MCP Server Selection**: Research and select an established MCP server that can:
+1. Connect to Supabase storage
+2. Retrieve uploaded files by session ID
+3. Copy files to local session directories
+
+**Candidates**:
+- Official Supabase MCP server (if available)
+- Community MCP servers for Supabase/PostgreSQL
+- Generic file storage MCP servers
+
+**Integration Point**: Called at start of `analysis_execution` node
+
+### Native Python Execution
+
+**Decision**: Agent executes Python scripts via native bash (no Docker container)
+**Why**: Simpler architecture, faster execution, no container overhead.
+
+**How it works**:
+1. Agent writes Python scripts to `/analysis/scripts/` directory
+2. Agent runs scripts via bash: `python scripts/NNN_analysis.py`
+3. Output captured from stdout/stderr
+
+**Required Environment**: pandas, numpy, scipy installed in agent runtime environment
 
 ---
 
@@ -294,27 +334,38 @@ Claude API limits (standard tier):
 - **Approach**: pandas with chunked reading if needed
 - **Memory**: Load one DataFrame at a time; release after analysis
 
-### LLM Calls (Memory Loop Architecture)
+### LLM Calls (Claude Agent SDK Architecture)
 
-**Pre-Loop Nodes** (fixed cost):
+**Pre-Analysis Nodes** (fixed cost):
 - **Schema inference**: 1 call (~5-10s)
-- **Planning**: 1 call (~3-5s)
+- **Metric identification**: 1 call (~2-3s)
 - **Hypothesis generation**: 1 call (~5-10s)
 
-**Memory Loop** (variable, up to 15 iterations):
-- **Decision call**: ~6000 tokens input (working memory) → code output
-- **Compression call**: Raw output → 2-3 sentence summary
-- **Per iteration**: ~10-15s (decision + execution + compression)
+**Analysis Execution** (Claude Agent SDK query()):
+- **Per hypothesis**: 1 `query()` call with up to 10 turns
+- **Typical hypotheses**: 5-7 generated
+- **Each turn**: Agent reasons, writes script, executes, interprets
+- **Logging**: Agent writes markdown log per hypothesis
 
-**Post-Loop Nodes** (fixed cost):
+**Post-Analysis Nodes** (fixed cost):
 - **Memory dump**: Compilation, no LLM call
 - **Report generation**: 1 call (~5-10s)
 
 **Token Budget**:
-- Working memory per iteration: ~6000 tokens
-- Max iterations: 15
-- Worst case total: ~90K input tokens + compression overhead
+- Per hypothesis session: ~10K-20K tokens (depends on complexity)
+- 5-7 hypotheses: ~50K-140K tokens total
+- Max turns per hypothesis: 10
 - Target: Complete investigation in < 15 minutes (SC-001)
+
+**Cost Tracking**:
+```python
+# Each ResultMessage includes metrics
+if isinstance(message, ResultMessage):
+    print(f"Duration: {message.duration_ms}ms")
+    print(f"Turns: {message.num_turns}")
+    print(f"Tokens: {message.total_tokens}")
+    print(f"Cost: ${message.total_cost_usd}")
+```
 
 ### Frontend
 
@@ -351,14 +402,12 @@ MAX_FILE_SIZE_MB=50
 ANTHROPIC_API_KEY=sk-ant-...
 ANTHROPIC_MODEL=claude-sonnet-4-20250514
 LLM_MAX_RETRIES=3
+ANALYSIS_MAX_TURNS=10  # Max turns per hypothesis
 
-# MCP Server
-MCP_SERVER_URL=http://localhost:3000
-MCP_TRANSPORT=stdio  # or http
-
-# Supabase (required for memory storage + RAG)
+# Supabase (required for file storage + memory + RAG)
 SUPABASE_URL=https://xxx.supabase.co
 SUPABASE_ANON_KEY=eyJ...
+SUPABASE_SERVICE_KEY=eyJ...  # For file retrieval MCP
 ```
 
 ---

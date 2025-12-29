@@ -14,7 +14,7 @@ This document defines all data entities, their attributes, and relationships for
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                          DATA MODEL OVERVIEW                                 │
-│                        (Memory Loop Architecture)                            │
+│                 (Claude Agent SDK Orchestrator Architecture)                 │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────┐
@@ -83,14 +83,15 @@ This document defines all data entities, their attributes, and relationships for
          │                          │ Referenced by
          │                          ▼
          │                 ┌─────────────────┐        ┌─────────────────┐
-         │                 │    FINDING      │←───────│ ITERATION_LOG   │
-         │                 │  (Compressed)   │  1:1   │                 │
-         │                 │                 │        │  iteration      │
-         │                 │  finding_id     │        │  decision       │
-         │                 │  iteration      │        │  code_executed  │
-         │                 │  summary        │        │  raw_output     │
-         │                 │  full_output_ref│        │  compressed_sum │
-         │                 │  hypothesis_ref │        │  hyp_changes    │
+         │                 │    FINDING      │←───────│  SESSION_LOG    │
+         │                 │ (per hypothesis)│  1:1   │                 │
+         │                 │                 │        │  hypothesis_id  │
+         │                 │  finding_id     │        │  start_time     │
+         │                 │  hypothesis_id  │        │  end_time       │
+         │                 │  outcome        │        │  outcome        │
+         │                 │  evidence       │        │  turns          │
+         │                 │  confidence     │        │  key_findings   │
+         │                 │  session_log_ref│        │  scripts_created│
          │                 └────────┬────────┘        └─────────────────┘
          │                          │
          └──────────────────────────┤
@@ -362,76 +363,161 @@ A potential explanation for the metric movement.
 | `status` | `enum` | Required | `PENDING`, `INVESTIGATING`, `CONFIRMED`, `RULED_OUT` |
 | `created_at` | `datetime (ISO)` | Required | Generation timestamp |
 
-**Status Transitions** (Memory Loop):
+**Status Transitions** (Claude Agent SDK Orchestrator):
 ```
-PENDING → INVESTIGATING (when loop starts examining this hypothesis)
-INVESTIGATING → CONFIRMED (when evidence supports the hypothesis)
-INVESTIGATING → RULED_OUT (when evidence contradicts the hypothesis)
-INVESTIGATING → PENDING (when pivoting to different approach)
+PENDING → INVESTIGATING (when orchestrator starts query() for this hypothesis)
+INVESTIGATING → CONFIRMED (when Claude Agent SDK concludes with supporting evidence)
+INVESTIGATING → RULED_OUT (when Claude Agent SDK concludes with contradicting evidence)
 ```
 
-**Storage**: `sessions/{session_id}/analysis/hypotheses/hyp_{NNN}.json`
+**Storage**: `sessions/{session_id}/analysis/hypotheses.json` (all hypotheses in single file)
 
 ---
 
 ### Finding
 
-A compressed summary of one Memory Loop iteration result.
+Result from a completed hypothesis investigation session.
 
 | Attribute | Type | Constraints | Description |
 |-----------|------|-------------|-------------|
-| `finding_id` | `string` | PK, Required | Unique ID (e.g., `find_001`) |
-| `iteration` | `integer` | Required | Which loop iteration (1-15) |
-| `summary` | `string` | Required, max 500 | 2-3 sentence compressed summary |
-| `full_output_ref` | `string` | Required | Path to full raw output |
-| `hypothesis_affected` | `string` | Optional | Which hypothesis this finding relates to |
-| `created_at` | `datetime (ISO)` | Required | Finding timestamp |
+| `finding_id` | `string` | PK, Required | Unique ID (e.g., `F1`) |
+| `hypothesis_id` | `string` | FK → Hypothesis, Required | Which hypothesis was investigated |
+| `outcome` | `enum` | Required | `CONFIRMED`, `RULED_OUT` |
+| `evidence` | `string` | Required, max 500 | Key evidence supporting the conclusion |
+| `confidence` | `enum` | Required | `HIGH`, `MEDIUM`, `LOW` |
+| `key_metrics` | `array<string>` | Required | Key numbers discovered |
+| `session_log_ref` | `string` | Required | Path to session log JSON |
+| `completed_at` | `datetime (ISO)` | Required | Completion timestamp |
 
-**Summary Format**: Compressed by LLM to answer:
-1. What was tested/analyzed?
-2. What key numbers or patterns were found?
-3. What does this imply for the hypothesis?
+**Example**:
+```json
+{
+  "finding_id": "F1",
+  "hypothesis_id": "H1",
+  "outcome": "CONFIRMED",
+  "evidence": "iOS DAU dropped 15.6% while Android +0.2%",
+  "confidence": "HIGH",
+  "key_metrics": ["iOS DAU: -15.6%", "Android DAU: +0.2%"],
+  "session_log_ref": "logs/session_H1_20251229T103045.json",
+  "completed_at": "2025-12-29T10:35:12Z"
+}
+```
 
 **Storage**: Part of `findings_ledger.json`
 
 ---
 
-### IterationLog
+### SessionLog
 
-Full record of one Memory Loop iteration (for debugging/audit).
+Log of a single hypothesis investigation session (Claude Agent SDK query()).
 
 | Attribute | Type | Constraints | Description |
 |-----------|------|-------------|-------------|
-| `iteration` | `integer` | PK, Required | Loop iteration number (1-15) |
-| `decision` | `enum` | Required | `ANALYZE`, `DRILL_DOWN`, `PIVOT`, `CONCLUDE` |
-| `code_executed` | `string` | Required | Python code sent to MCP server |
-| `raw_output` | `string` | Required | stdout/stderr from execution |
-| `compressed_summary` | `string` | Required | The 2-3 sentence summary |
-| `hypothesis_status_changes` | `object` | Optional | Any status changes to hypotheses |
-| `timestamp` | `datetime (ISO)` | Required | Iteration timestamp |
+| `hypothesis_id` | `string` | PK, Required | Which hypothesis was investigated |
+| `start_time` | `datetime (ISO)` | Required | Session start timestamp |
+| `end_time` | `datetime (ISO)` | Required | Session end timestamp |
+| `outcome` | `enum` | Required | `CONFIRMED`, `RULED_OUT` |
+| `turns` | `integer` | Required | Number of query() turns |
+| `total_tokens` | `integer` | Required | Total tokens used |
+| `cost_usd` | `float` | Required | Total cost in USD |
+| `key_findings` | `array<string>` | Required | Key findings discovered |
+| `scripts_created` | `array<string>` | Required | Python scripts written |
+| `artifacts_created` | `array<string>` | Required | Output files created |
 
-**Decision Types**:
-- `ANALYZE`: Execute analysis code on current hypothesis
-- `DRILL_DOWN`: Deeper investigation into a finding
-- `PIVOT`: Switch to a different hypothesis or approach
-- `CONCLUDE`: Investigation complete, generate report
+**Example**:
+```json
+{
+  "hypothesis_id": "H1",
+  "start_time": "2025-12-29T10:30:46Z",
+  "end_time": "2025-12-29T10:35:12Z",
+  "outcome": "CONFIRMED",
+  "turns": 7,
+  "total_tokens": 15420,
+  "cost_usd": 0.046,
+  "key_findings": [
+    "iOS DAU: 45K → 38K (-15.6%)",
+    "Android DAU: 38K → 38.5K (+0.2%)",
+    "iOS v17.2.1 has 90% of iOS decline"
+  ],
+  "scripts_created": ["001_device_analysis.py"],
+  "artifacts_created": ["device_breakdown.csv"]
+}
+```
 
-**Storage**: `sessions/{session_id}/analysis/iterations/iter_{NNN}.json`
+**Storage**: `sessions/{session_id}/analysis/logs/session_{hypothesis_id}_{timestamp}.json`
+
+---
+
+### ProgressLog
+
+High-level investigation log file (human-readable).
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| content | `string (plain text)` | Timestamped log entries |
+
+**Format**:
+```
+[2025-12-29 10:30:45] Investigation started
+[2025-12-29 10:30:46] Investigating: iOS App Update Impact
+[2025-12-29 10:35:12] Completed: iOS App Update Impact → CONFIRMED
+[2025-12-29 10:35:13] Investigating: Android Regression
+[2025-12-29 10:38:45] Completed: Android Regression → RULED_OUT
+[2025-12-29 10:38:46] Investigation complete - 1 hypothesis confirmed
+```
+
+**Storage**: `sessions/{session_id}/analysis/progress.txt`
 
 ---
 
 ### FindingsLedger
 
-Aggregation of all compressed findings from the Memory Loop.
+Aggregation of all findings from hypothesis investigations. Built incrementally as each hypothesis completes.
 
 | Attribute | Type | Constraints | Description |
 |-----------|------|-------------|-------------|
 | `session_id` | `string (UUID)` | FK → Session, Required | Parent session |
-| `findings` | `array<Finding>` | Required | All compressed findings |
-| `hypothesis_outcomes` | `object` | Required | Final status of each hypothesis |
-| `total_iterations` | `integer` | Required | How many loop iterations ran |
-| `exit_reason` | `enum` | Required | `CONCLUDE`, `MAX_ITERATIONS`, `STALL_DETECTED` |
-| `created_at` | `datetime (ISO)` | Required | Ledger finalization timestamp |
+| `findings` | `array<Finding>` | Required | All findings (one per hypothesis) |
+| `summary` | `object` | Required | Summary statistics |
+| `created_at` | `datetime (ISO)` | Required | Ledger creation timestamp |
+| `updated_at` | `datetime (ISO)` | Required | Last update timestamp |
+
+**Summary Object**:
+```json
+{
+  "total_hypotheses": 5,
+  "confirmed": 1,
+  "ruled_out": 4,
+  "pending": 0
+}
+```
+
+**Example**:
+```json
+{
+  "session_id": "abc-123",
+  "created_at": "2025-12-29T10:30:45Z",
+  "updated_at": "2025-12-29T10:38:46Z",
+  "findings": [
+    {
+      "finding_id": "F1",
+      "hypothesis_id": "H1",
+      "outcome": "CONFIRMED",
+      "evidence": "iOS DAU dropped 15.6% while Android +0.2%",
+      "confidence": "HIGH",
+      "key_metrics": ["iOS DAU: -15.6%", "Android DAU: +0.2%"],
+      "session_log_ref": "logs/session_H1_20251229T103045.json",
+      "completed_at": "2025-12-29T10:35:12Z"
+    }
+  ],
+  "summary": {
+    "total_hypotheses": 5,
+    "confirmed": 1,
+    "ruled_out": 4,
+    "pending": 0
+  }
+}
+```
 
 **Storage**: `sessions/{session_id}/analysis/findings_ledger.json`
 
@@ -539,21 +625,20 @@ sessions/{session_id}/
 │   ├── {file_id}.csv           # Raw UploadedFile
 │   └── {file_id}_meta.json     # UploadedFile metadata + FileSchema
 ├── analysis/
+│   ├── progress.txt            # ProgressLog (human-readable)
+│   ├── hypotheses.json         # All Hypothesis entities
 │   ├── schema.json             # DataModel entity
 │   ├── metric_requirements.json # MetricRequirements entity
-│   ├── hypotheses/
-│   │   ├── hyp_001.json        # Hypothesis with status
-│   │   ├── hyp_002.json
+│   ├── scripts/                # Python scripts written by agent
+│   │   ├── 001_device_analysis.py
+│   │   └── 002_geo_breakdown.py
+│   ├── logs/                   # Per-hypothesis session logs
+│   │   ├── session_H1_*.md     # Human-readable session log
+│   │   ├── session_H1_*.json   # SessionLog entity
 │   │   └── ...
-│   ├── findings_ledger.json    # FindingsLedger (compressed findings)
-│   ├── iterations/
-│   │   ├── iter_001.json       # IterationLog (full record)
-│   │   ├── iter_002.json
-│   │   └── ...
-│   └── full_outputs/
-│       ├── output_001.txt      # Raw MCP execution output
-│       ├── output_002.txt
-│       └── ...
+│   ├── artifacts/              # Analysis outputs
+│   │   └── device_breakdown.csv
+│   └── findings_ledger.json    # FindingsLedger (built incrementally)
 ├── results/
 │   └── explanations.json       # Array of Explanation entities
 ├── report.md                   # Report entity (content only)
@@ -658,9 +743,12 @@ See [plan.md](./plan.md#agent-state-schema) for the full `InvestigationState` Ty
 | Get file metadata | Read `sessions/{id}/files/{fid}_meta.json` |
 | Get analysis artifacts | Read `sessions/{id}/analysis/*.json` |
 | Get metric requirements | Read `sessions/{id}/analysis/metric_requirements.json` |
+| Get hypotheses | Read `sessions/{id}/analysis/hypotheses.json` |
 | Get findings ledger | Read `sessions/{id}/analysis/findings_ledger.json` |
-| Get iteration log | Read `sessions/{id}/analysis/iterations/iter_{N}.json` |
-| Get raw output | Read `sessions/{id}/analysis/full_outputs/output_{N}.txt` |
+| Get progress log | Read `sessions/{id}/analysis/progress.txt` |
+| Get session log | Read `sessions/{id}/analysis/logs/session_{H}_{ts}.json` |
+| List scripts | List `sessions/{id}/analysis/scripts/*.py` |
+| List artifacts | List `sessions/{id}/analysis/artifacts/*` |
 | Get report | Read `sessions/{id}/report.md` |
 | Get chat history | Read `sessions/{id}/chat/history.json` |
 | Find expired sessions | Scan all `sessions/*/metadata.json` where `expires_at < now` |
