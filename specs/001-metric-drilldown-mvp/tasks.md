@@ -25,16 +25,16 @@
 
 **Purpose**: Project initialization and basic structure
 
-- [ ] T001 Create project directory structure per plan.md (frontend/, backend/, agent/, shared/, sessions/)
-- [ ] T002 [P] Initialize Node.js project with Express dependencies in frontend/package.json
-- [ ] T003 [P] Initialize Python project with FastAPI dependencies in backend/requirements.txt
-- [ ] T004 [P] Initialize Python project with LangGraph dependencies in agent/requirements.txt
-- [ ] T005 [P] Create shared config module in shared/config.py
-- [ ] T006 Create .env.example with all environment variables per research.md
-- [ ] T007 Create docker-compose.yml for local development per quickstart.md
-- [ ] T008 [P] Configure ESLint/Prettier for frontend in frontend/.eslintrc.js
-- [ ] T009 [P] Configure Ruff/Black for Python projects in pyproject.toml
-- [ ] T010 Create .gitignore with sessions/, venv/, node_modules/, __pycache__/
+- [X] T001 Create project directory structure per plan.md (frontend/, backend/, agent/, shared/, sessions/)
+- [X] T002 [P] Initialize Node.js project with Express dependencies in frontend/package.json
+- [X] T003 [P] Initialize Python project with FastAPI dependencies in backend/requirements.txt
+- [X] T004 [P] Initialize Python project with LangGraph dependencies in agent/requirements.txt
+- [X] T005 [P] Create shared config module in shared/config.py
+- [X] T006 Create .env.example with all environment variables per research.md
+- [X] T007 Create docker-compose.yml for local development per quickstart.md
+- [X] T008 [P] Configure ESLint/Prettier for frontend in frontend/.eslintrc.js
+- [X] T009 [P] Configure Ruff/Black for Python projects in pyproject.toml
+- [X] T010 Create .gitignore with sessions/, venv/, node_modules/, __pycache__/
 
 ---
 
@@ -46,35 +46,35 @@
 
 ### Backend Foundation
 
-- [ ] T011 Create FastAPI application entry point in backend/src/main.py
-- [ ] T012 [P] Implement environment configuration in backend/src/config.py
-- [ ] T013 [P] Create Pydantic schemas for Session, File, InvestigationRequest in backend/src/models/schemas.py
-- [ ] T014 [P] Create error response models and error codes in backend/src/models/errors.py
-- [ ] T015 Implement global error handler middleware in backend/src/api/middleware/error_handler.py
-- [ ] T016 Create session storage directory manager in backend/src/services/session_manager.py
-- [ ] T017 Register API routes in backend/src/api/routes/__init__.py
+- [X] T011 Create FastAPI application entry point in backend/src/main.py
+- [X] T012 [P] Implement environment configuration in backend/src/config.py
+- [X] T013 [P] Create Pydantic schemas for Session, File, InvestigationRequest in backend/src/models/schemas.py
+- [X] T014 [P] Create error response models and error codes in backend/src/models/errors.py
+- [X] T015 Implement global error handler middleware in backend/src/api/middleware/error_handler.py
+- [X] T016 Create session storage directory manager in backend/src/services/session_manager.py
+- [X] T017 Register API routes in backend/src/api/routes/__init__.py
 
 ### Agent Foundation
 
-- [ ] T018 Create InvestigationState TypedDict in agent/src/state.py
-- [ ] T019 [P] Create FileInfo, Hypothesis, Finding, SessionLog TypedDicts in agent/src/state.py
-- [ ] T020 Create LangGraph state machine skeleton in agent/src/graph.py
-- [ ] T021 [P] Create CSV tools module in agent/src/tools/csv_tools.py
-- [ ] T022 [P] Create file tools module in agent/src/tools/file_tools.py
-- [ ] T023 Create prompt templates directory in agent/src/prompts/
+- [X] T018 Create InvestigationState TypedDict in agent/src/state.py
+- [X] T019 [P] Create FileInfo, Hypothesis, Finding, SessionLog TypedDicts in agent/src/state.py
+- [X] T020 Create LangGraph state machine skeleton in agent/src/graph.py
+- [X] T021 [P] Create CSV tools module in agent/src/tools/csv_tools.py
+- [X] T022 [P] Create file tools module in agent/src/tools/file_tools.py
+- [X] T023 Create prompt templates directory in agent/src/prompts/
 
 ### Frontend Foundation
 
-- [ ] T024 Create Express server entry point in frontend/src/server.js
-- [ ] T025 [P] Create base EJS layout template in frontend/src/views/layout.ejs
-- [ ] T026 [P] Create CSS styles with WCAG 2.1 AA compliance in frontend/src/public/css/styles.css
-- [ ] T027 Create route index with proxy to backend in frontend/src/routes/index.js
-- [ ] T028 [P] Add marked.js for markdown rendering in frontend/src/public/js/app.js
+- [X] T024 Create Express server entry point in frontend/src/server.js
+- [X] T025 [P] Create base EJS layout template in frontend/src/views/layout.ejs
+- [X] T026 [P] Create CSS styles with WCAG 2.1 AA compliance in frontend/src/public/css/styles.css
+- [X] T027 Create route index with proxy to backend in frontend/src/routes/index.js
+- [X] T028 [P] Add marked.js for markdown rendering in frontend/src/public/js/app.js
 
 ### Supabase Foundation
 
-- [ ] T029 Create Supabase client wrapper in agent/src/memory/supabase_rag.py
-- [ ] T030 Create memory_documents table schema (SQL migration) in backend/migrations/001_memory_documents.sql
+- [X] T029 Create Supabase client wrapper in agent/src/memory/supabase_rag.py
+- [X] T030 Create memory_documents table schema (SQL migration) in backend/migrations/001_memory_documents.sql
 
 **Checkpoint**: Foundation ready - user story implementation can now begin
 
@@ -88,64 +88,64 @@
 
 ### Backend - Session & File Management
 
-- [ ] T031 [US1] Implement POST /api/sessions endpoint in backend/src/api/routes/sessions.py
-- [ ] T032 [US1] Implement GET /api/sessions/{id} endpoint in backend/src/api/routes/sessions.py
-- [ ] T033 [US1] Implement DELETE /api/sessions/{id} endpoint in backend/src/api/routes/sessions.py
-- [ ] T034 [US1] Implement POST /api/sessions/{id}/files endpoint in backend/src/api/routes/files.py
-- [ ] T035 [US1] Implement PUT /api/sessions/{id}/files/{fid} endpoint in backend/src/api/routes/files.py
-- [ ] T036 [US1] Implement DELETE /api/sessions/{id}/files/{fid} endpoint in backend/src/api/routes/files.py
-- [ ] T037 [US1] Implement file validation (CSV, 50MB, headers) in backend/src/services/file_handler.py
+- [X] T031 [US1] Implement POST /api/sessions endpoint in backend/src/api/routes/sessions.py
+- [X] T032 [US1] Implement GET /api/sessions/{id} endpoint in backend/src/api/routes/sessions.py
+- [X] T033 [US1] Implement DELETE /api/sessions/{id} endpoint in backend/src/api/routes/sessions.py
+- [X] T034 [US1] Implement POST /api/sessions/{id}/files endpoint in backend/src/api/routes/files.py
+- [X] T035 [US1] Implement PUT /api/sessions/{id}/files/{fid} endpoint in backend/src/api/routes/files.py
+- [X] T036 [US1] Implement DELETE /api/sessions/{id}/files/{fid} endpoint in backend/src/api/routes/files.py
+- [X] T037 [US1] Implement file validation (CSV, 50MB, headers) in backend/src/services/file_handler.py
 
 ### Backend - Investigation Orchestration
 
-- [ ] T038 [US1] Implement POST /api/sessions/{id}/investigate endpoint in backend/src/api/routes/investigate.py
-- [ ] T039 [US1] Create agent runner service in backend/src/services/agent_runner.py
-- [ ] T040 [US1] Implement GET /api/sessions/{id}/report endpoint in backend/src/api/routes/investigate.py
+- [X] T038 [US1] Implement POST /api/sessions/{id}/investigate endpoint in backend/src/api/routes/investigate.py
+- [X] T039 [US1] Create agent runner service in backend/src/services/agent_runner.py
+- [X] T040 [US1] Implement GET /api/sessions/{id}/report endpoint in backend/src/api/routes/investigate.py
 
 ### Agent - Schema Inference Node
 
-- [ ] T041 [US1] Implement csv_tools.get_headers() in agent/src/tools/csv_tools.py
-- [ ] T042 [US1] Implement csv_tools.sample_rows() in agent/src/tools/csv_tools.py
-- [ ] T043 [US1] Implement csv_tools.get_row_count() in agent/src/tools/csv_tools.py
-- [ ] T044 [US1] Create schema inference prompt in agent/src/prompts/schema_inference.txt
-- [ ] T045 [US1] Implement schema_inference node in agent/src/nodes/schema_inference.py
+- [X] T041 [US1] Implement csv_tools.get_headers() in agent/src/tools/csv_tools.py
+- [X] T042 [US1] Implement csv_tools.sample_rows() in agent/src/tools/csv_tools.py
+- [X] T043 [US1] Implement csv_tools.get_row_count() in agent/src/tools/csv_tools.py
+- [X] T044 [US1] Create schema inference prompt in agent/src/prompts/schema_inference.txt
+- [X] T045 [US1] Implement schema_inference node in agent/src/nodes/schema_inference.py
 
 ### Agent - Metric Identification Node
 
-- [ ] T046 [US1] Implement metric_identification node (pure Python validation) in agent/src/nodes/metric_identification.py
+- [X] T046 [US1] Implement metric_identification node (pure Python validation) in agent/src/nodes/metric_identification.py
 
 ### Agent - Hypothesis Generator Node
 
-- [ ] T047 [US1] Create hypothesis generation prompt in agent/src/prompts/hypothesis_generation.txt
-- [ ] T048 [US1] Implement hypothesis_generator node in agent/src/nodes/hypothesis_generator.py
+- [X] T047 [US1] Create hypothesis generation prompt in agent/src/prompts/hypothesis_generation.txt
+- [X] T048 [US1] Implement hypothesis_generator node in agent/src/nodes/hypothesis_generator.py
 
 ### Agent - Analysis Execution Node (Claude Agent SDK)
 
-- [ ] T049 [US1] Create Supabase MCP client for file retrieval in agent/src/tools/mcp_client.py
-- [ ] T050 [US1] Create analysis system prompt in agent/src/prompts/analysis_system.txt
-- [ ] T051 [US1] Implement Python orchestrator loop in agent/src/nodes/analysis_execution.py
-- [ ] T052 [US1] Implement Claude Agent SDK query() integration in agent/src/nodes/analysis_execution.py
-- [ ] T053 [US1] Implement findings_ledger.json incremental update logic in agent/src/memory/findings_ledger.py
-- [ ] T054 [US1] Implement progress.txt logging in agent/src/memory/progress_log.py
-- [ ] T055 [US1] Implement session log JSON/MD writing in agent/src/memory/session_log.py
+- [X] T049 [US1] Create Supabase MCP client for file retrieval in agent/src/tools/mcp_client.py
+- [X] T050 [US1] Create analysis system prompt in agent/src/prompts/analysis_system.txt
+- [X] T051 [US1] Implement Python orchestrator loop in agent/src/nodes/analysis_execution.py
+- [X] T052 [US1] Implement Claude Agent SDK query() integration in agent/src/nodes/analysis_execution.py
+- [X] T053 [US1] Implement findings_ledger.json incremental update logic in agent/src/memory/findings_ledger.py
+- [X] T054 [US1] Implement progress.txt logging in agent/src/memory/progress_log.py
+- [X] T055 [US1] Implement session log JSON/MD writing in agent/src/memory/session_log.py
 
 ### Agent - Memory Dump Node
 
-- [ ] T056 [US1] Implement compile_memory_document() in agent/src/memory/working_memory.py
-- [ ] T057 [US1] Implement memory_dump node in agent/src/nodes/memory_dump.py
-- [ ] T058 [US1] Implement Supabase document storage with embeddings in agent/src/memory/supabase_rag.py
+- [X] T056 [US1] Implement compile_memory_document() in agent/src/memory/working_memory.py
+- [X] T057 [US1] Implement memory_dump node in agent/src/nodes/memory_dump.py
+- [X] T058 [US1] Implement Supabase document storage with embeddings in agent/src/memory/supabase_rag.py
 
 ### Agent - Report Generator Node
 
-- [ ] T059 [US1] Create report template prompt in agent/src/prompts/report_template.txt
-- [ ] T060 [US1] Implement report_generator node in agent/src/nodes/report_generator.py
-- [ ] T061 [US1] Implement no_findings_report fallback in agent/src/nodes/report_generator.py
+- [X] T059 [US1] Create report template prompt in agent/src/prompts/report_template.txt
+- [X] T060 [US1] Implement report_generator node in agent/src/nodes/report_generator.py
+- [X] T061 [US1] Implement no_findings_report fallback in agent/src/nodes/report_generator.py
 
 ### Agent - Graph Assembly
 
-- [ ] T062 [US1] Wire all nodes into LangGraph state machine in agent/src/graph.py
-- [ ] T063 [US1] Add conditional edges for metric validation in agent/src/graph.py
-- [ ] T064 [US1] Add conditional edge for no_findings path in agent/src/graph.py
+- [X] T062 [US1] Wire all nodes into LangGraph state machine in agent/src/graph.py
+- [X] T063 [US1] Add conditional edges for metric validation in agent/src/graph.py
+- [X] T064 [US1] Add conditional edge for no_findings path in agent/src/graph.py
 
 ### Frontend - Form UI
 

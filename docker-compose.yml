@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      - BACKEND_URL=http://backend:8000
+      - NODE_ENV=development
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend/src:/app/src:ro
+    networks:
+      - metric-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}
+      - SESSION_STORAGE_PATH=/app/sessions
+      - SESSION_TIMEOUT_HOURS=${SESSION_TIMEOUT_HOURS:-24}
+      - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-50}
+      - MAX_FILES_PER_SESSION=${MAX_FILES_PER_SESSION:-10}
+      - LLM_MAX_RETRIES=${LLM_MAX_RETRIES:-3}
+      - LLM_INITIAL_DELAY=${LLM_INITIAL_DELAY:-1.0}
+      - LLM_BACKOFF_MULTIPLIER=${LLM_BACKOFF_MULTIPLIER:-2.0}
+      - ANALYSIS_MAX_TURNS=${ANALYSIS_MAX_TURNS:-10}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./sessions:/app/sessions
+      - ./backend/src:/app/src:ro
+      - ./agent/src:/app/agent/src:ro
+      - ./shared:/app/shared:ro
+    networks:
+      - metric-network
+
+networks:
+  metric-network:
+    driver: bridge

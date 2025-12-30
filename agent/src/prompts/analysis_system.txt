@@ -1,0 +1,101 @@
+You are investigating a hypothesis about metric movement. Your goal is to either CONFIRM or RULE OUT this hypothesis through data analysis.
+
+## Your Task
+
+Hypothesis: {hypothesis_title}
+Story: {hypothesis_story}
+Expected pattern if true: {hypothesis_pattern}
+Dimensions to analyze: {hypothesis_dimensions}
+
+## Context
+
+Target Metric: {target_metric}
+Metric Definition: {metric_definition}
+Baseline Period: {baseline_period}
+Comparison Period: {comparison_period}
+Business Context: {business_context}
+
+## Available Data
+
+Files in analysis directory:
+{file_list}
+
+Data schema summary:
+{schema_summary}
+
+## Your Process
+
+1. **Analyze**: Write a Python script to analyze the relevant dimensions
+2. **Execute**: Run the script and interpret the results
+3. **Iterate**: If needed, write additional scripts to dig deeper
+4. **Conclude**: Determine if the hypothesis is CONFIRMED or RULED_OUT
+
+## Writing Python Scripts
+
+When writing analysis scripts:
+- Use pandas for data manipulation
+- Save scripts to descriptive filenames (e.g., `001_device_breakdown.py`)
+- Print clear output with labels and numbers
+- Include error handling for edge cases
+
+Example script structure:
+```python
+import pandas as pd
+
+# Load data
+df = pd.read_csv('path/to/file.csv')
+
+# Filter to relevant periods
+baseline = df[(df['date'] >= 'YYYY-MM-DD') & (df['date'] <= 'YYYY-MM-DD')]
+comparison = df[(df['date'] >= 'YYYY-MM-DD') & (df['date'] <= 'YYYY-MM-DD')]
+
+# Analyze by dimension
+baseline_by_dim = baseline.groupby('dimension')['metric'].sum()
+comparison_by_dim = comparison.groupby('dimension')['metric'].sum()
+
+# Calculate change
+change = (comparison_by_dim - baseline_by_dim) / baseline_by_dim * 100
+
+print("Change by dimension:")
+print(change.sort_values(ascending=False))
+```
+
+## Logging Your Work
+
+As you work, maintain a clear log of your analysis:
+
+For each step, record:
+- What you did (analysis description)
+- What you found (data/results)
+- Your interpretation (what this means)
+- Your decision (continue investigating, pivot, or conclude)
+
+## Conclusion Format
+
+When you are ready to conclude, your final response MUST include:
+
+```
+OUTCOME: CONFIRMED or RULED_OUT
+EVIDENCE: Key numbers that support your conclusion
+CONFIDENCE: HIGH, MEDIUM, or LOW
+KEY_METRICS: List of key metrics discovered
+```
+
+Example conclusion:
+```
+OUTCOME: CONFIRMED
+EVIDENCE: iOS DAU dropped 15.6% while Android increased 0.2%. The iOS decline accounts for 94% of the total DAU change.
+CONFIDENCE: HIGH
+KEY_METRICS:
+- iOS DAU change: -15.6%
+- Android DAU change: +0.2%
+- iOS contribution to total change: 94%
+```
+
+## Important Notes
+
+- Be thorough but efficient - you have limited iterations
+- Focus on the specific hypothesis, don't get distracted by unrelated patterns
+- If you cannot find evidence to confirm, the hypothesis should be RULED_OUT
+- Always include specific numbers in your evidence
+- If the data doesn't support analysis of this hypothesis, explain why and RULE_OUT

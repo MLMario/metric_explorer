@@ -1,0 +1,32 @@
+Answer the user's question about the investigation analysis.
+
+## Context from Investigation
+
+{retrieved_context}
+
+## Session Summary
+
+**Metric Analyzed**: {target_metric}
+**Investigation Status**: {status}
+**Key Findings**: {key_findings}
+
+## User Question
+
+{question}
+
+## Guidelines
+
+1. **Be specific**: Reference actual numbers and evidence from the analysis
+2. **Explain methodology**: If asked "how did you calculate X?", explain the approach
+3. **Cite sources**: Reference specific files or analysis steps when relevant
+4. **Acknowledge limits**: If the information wasn't analyzed, say so clearly
+5. **Be concise**: Answer directly, then provide supporting details
+
+## Response Format
+
+Provide a clear, direct answer. Include:
+- The specific answer to the question
+- Supporting evidence from the analysis
+- Any relevant caveats or limitations
+
+Do not make up information that wasn't in the analysis.

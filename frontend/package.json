@@ -1,0 +1,40 @@
+{
+  "name": "metric-drilldown-frontend",
+  "version": "1.0.0",
+  "description": "Frontend for Metric Drill-Down Agent MVP",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "format": "prettier --write src/",
+    "format:check": "prettier --check src/"
+  },
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "ejs": "^3.1.9",
+    "express": "^4.18.2",
+    "marked": "^9.1.6"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^1.2.0",
+    "eslint": "^8.56.0",
+    "prettier": "^3.2.0",
+    "vitest": "^1.2.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "metric-analysis",
+    "htmx",
+    "express",
+    "ejs"
+  ],
+  "license": "MIT"
+}

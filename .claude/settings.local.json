@@ -3,7 +3,11 @@
     "allow": [
       "Bash(git commit -m \"$(cat <<''EOF''\nAdd Memory Loop architecture to agent design documents\n\nIntegrate iterative analysis pattern with MCP code execution:\n\n- plan.md: Replace single-pass data_analyzer with analysis_execution\n  node containing Memory Loop (up to 15 iterations), add memory_dump\n  node for Supabase storage, update agent state schema with Finding,\n  IterationLog, and FindingsLedger types\n\n- research.md: Add MCP Client and Docker MCP Server dependencies,\n  update LLM calls section for Memory Loop token budget (~6000\n  tokens/iteration), change Supabase from optional to required\n\n- data-model.md: Add Finding, IterationLog, FindingsLedger, and\n  MemoryDocument entities, update Hypothesis status enum to PENDING/\n  INVESTIGATING/CONFIRMED/RULED_OUT, add Supabase schema for RAG\n\n- agent-tools.md: Remove Pandas Tools and Calculation Tools (code\n  runs in MCP container), add MCP Code Execution section with\n  container lifecycle operations, add Compression and Working Memory\n  Assembly documentation\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n)\")",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(bash:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(cat:*)",
+      "Bash(python:*)"
     ]
   }
 }

@@ -1,0 +1,58 @@
+Analyze these CSV files to infer their schema and relationships.
+
+## Files
+
+{file_descriptions}
+
+## Task
+
+For each column in each file, determine:
+1. **Type**: Is this column a `dimension` (categorical), `measure` (numeric for aggregation), `id` (unique identifier), or `timestamp` (date/time)?
+2. **Cardinality**: Estimate of unique values (low/medium/high)
+3. **Relationships**: Are there columns that appear to be foreign keys to other tables?
+
+## Output Format
+
+Return a JSON object with this structure:
+```json
+{
+  "tables": [
+    {
+      "file_id": "...",
+      "name": "...",
+      "row_count": 1234,
+      "column_count": 5,
+      "columns": [
+        {
+          "name": "column_name",
+          "inferred_type": "dimension|measure|id|timestamp",
+          "data_type": "string|integer|float|date|datetime",
+          "cardinality": 123,
+          "sample_values": ["val1", "val2", "val3"],
+          "nullable": false
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from_table": "events",
+      "from_column": "user_id",
+      "to_table": "users",
+      "to_column": "id",
+      "relationship_type": "foreign_key",
+      "confidence": 0.95
+    }
+  ],
+  "recommended_dimensions": ["country", "platform", "user_segment"]
+}
+```
+
+## Guidelines
+
+- `id` columns typically have high cardinality and unique values
+- `timestamp` columns contain date/time data
+- `dimension` columns are good for grouping/segmentation
+- `measure` columns are numeric and can be aggregated (sum, avg, etc.)
+- Look for column name patterns: *_id, *_at, *_count, is_*, has_*
+- Recommend dimensions that would be useful for metric drill-down analysis

@@ -1,0 +1,59 @@
+Generate hypotheses for why this metric changed.
+
+## Context
+
+**Target Metric**: {target_metric}
+**Metric Definition**: {metric_definition}
+**Source File**: {source_file}
+
+**Baseline Period**: {baseline_start} to {baseline_end}
+**Comparison Period**: {comparison_start} to {comparison_end}
+
+**Business Context**:
+{business_context}
+
+**User Focus Areas** (if provided):
+{investigation_prompt}
+
+## Available Dimensions
+
+Based on the data model, these dimensions are available for analysis:
+{available_dimensions}
+
+## Task
+
+Generate 5-7 hypotheses that could explain why the metric changed. Each hypothesis should be:
+- **Testable**: Can be validated or invalidated with the available data
+- **Specific**: Focused on particular dimensions or segments
+- **Causal**: Tells a story about WHY the change occurred
+
+## Output Format
+
+Return a JSON array:
+```json
+[
+  {
+    "id": "H1",
+    "title": "iOS App Update Impact",
+    "causal_story": "A recent iOS app update introduced bugs causing users to churn, leading to DAU decline on iOS devices.",
+    "dimensions": ["platform", "app_version"],
+    "expected_pattern": "iOS DAU should show significant decline while Android remains stable",
+    "priority": 1,
+    "status": "PENDING"
+  }
+]
+```
+
+## Priority Guidelines
+
+- Priority 1-2: Most plausible based on context and common patterns
+- Priority 3-4: Reasonable alternatives worth investigating
+- Priority 5-7: Less likely but possible explanations
+
+## Common Hypothesis Patterns
+
+- **Segment shift**: One segment (geo, platform, user type) drove the change
+- **Feature impact**: A product change affected user behavior
+- **Seasonal effect**: Time-based patterns (day of week, holidays)
+- **External event**: Market conditions, competitor actions
+- **Data quality**: Tracking issues, definition changes

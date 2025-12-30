@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= typeof title !== 'undefined' ? title : 'Metric Drill-Down Agent' %></title>
+
+  <!-- HTMX -->
+  <script src="https://unpkg.com/htmx.org@2.0.0"></script>
+
+  <!-- Custom styles -->
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <!-- Skip link for accessibility -->
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <header class="header">
+    <div class="container">
+      <h1 class="logo">
+        <a href="/">Metric Drill-Down Agent</a>
+      </h1>
+      <nav class="nav" aria-label="Main navigation">
+        <ul>
+          <li><a href="/">New Investigation</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main-content" class="main">
+    <div class="container">
+      <%- body %>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <p>&copy; 2025 Metric Drill-Down Agent MVP</p>
+    </div>
+  </footer>
+
+  <!-- Custom JS -->
+  <script src="/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,120 @@
+<%- include('layout', { body: `
+<div class="section">
+  <h2>Start New Investigation</h2>
+  <p class="text-muted">Upload your CSV files and provide context to begin metric analysis.</p>
+</div>
+
+<form id="investigation-form" action="/api/sessions" method="POST" data-validate>
+  <!-- Section 1: Relevant Documents -->
+  <div class="section">
+    <h3 class="section-title">1. Relevant Documents</h3>
+
+    <div id="file-list">
+      <!-- File cards will be added here via HTMX -->
+    </div>
+
+    <div class="form-group">
+      <label for="file-upload" class="form-label">Add CSV File</label>
+      <input
+        type="file"
+        id="file-upload"
+        name="file"
+        accept=".csv"
+        class="form-input"
+        hx-post="/api/files"
+        hx-target="#file-list"
+        hx-swap="beforeend"
+        hx-encoding="multipart/form-data"
+      >
+      <p class="form-help">Maximum 50MB per file. CSV format only.</p>
+    </div>
+  </div>
+
+  <!-- Section 2: Business Context -->
+  <div class="section">
+    <h3 class="section-title">2. Business Context</h3>
+
+    <div class="grid grid-2">
+      <div class="form-group">
+        <label for="target_metric" class="form-label form-label-required">Target Metric Column</label>
+        <input
+          type="text"
+          id="target_metric"
+          name="target_metric"
+          class="form-input"
+          placeholder="e.g., dau, revenue, conversion_rate"
+          required
+        >
+        <p class="form-help">The column name in your CSV to analyze</p>
+      </div>
+
+      <div class="form-group">
+        <label for="metric_definition" class="form-label form-label-required">Metric Definition</label>
+        <textarea
+          id="metric_definition"
+          name="metric_definition"
+          class="form-textarea"
+          placeholder="How is this metric calculated? e.g., DAU is the count of distinct user_ids with at least one session per day"
+          required
+        ></textarea>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="business_context" class="form-label">Related Context</label>
+      <textarea
+        id="business_context"
+        name="business_context"
+        class="form-textarea"
+        placeholder="Any relevant background: recent changes, known issues, business events..."
+      ></textarea>
+    </div>
+
+    <div class="grid grid-2">
+      <div class="form-group">
+        <label class="form-label form-label-required">Baseline Period</label>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <input type="date" name="baseline_start" class="form-input" required>
+          <span>to</span>
+          <input type="date" name="baseline_end" class="form-input" required>
+        </div>
+        <p class="form-help">The "before" period for comparison</p>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label form-label-required">Comparison Period</label>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <input type="date" name="comparison_start" class="form-input" required>
+          <span>to</span>
+          <input type="date" name="comparison_end" class="form-input" required>
+        </div>
+        <p class="form-help">The period you want to investigate</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Section 3: Investigation Prompt -->
+  <div class="section">
+    <h3 class="section-title">3. Investigation Focus (Optional)</h3>
+
+    <div class="form-group">
+      <label for="investigation_prompt" class="form-label">Specific Hypotheses or Focus Areas</label>
+      <textarea
+        id="investigation_prompt"
+        name="investigation_prompt"
+        class="form-textarea"
+        placeholder="Any specific hypotheses you want tested, or dimensions to focus on..."
+      ></textarea>
+      <p class="form-help">Leave blank for the agent to explore freely</p>
+    </div>
+  </div>
+
+  <!-- Submit -->
+  <div class="section">
+    <button type="submit" class="btn btn-primary">
+      <span>Start Investigation</span>
+      <span class="htmx-indicator spinner" style="margin-left: 0.5rem;"></span>
+    </button>
+  </div>
+</form>
+` }) %>
