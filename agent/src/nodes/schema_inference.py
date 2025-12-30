@@ -11,17 +11,78 @@ saves files to sessions/<session_id>/files/ and the agent reads from the same
 filesystem. File paths are passed via state["files"][i]["path"].
 """
 
-import json
 import logging
 from pathlib import Path
+from typing import Literal
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel, Field
 
-from ..state import DataModel, InvestigationState, TableInfo
+from ..state import (
+    ColumnSchema,
+    DataModel,
+    InvestigationState,
+    Relationship,
+    TableInfo,
+)
 from ..tools import csv_tools
 
 logger = logging.getLogger(__name__)
+
+
+# Pydantic models for structured LLM output
+class ColumnSchemaModel(BaseModel):
+    """Schema for a single column - Pydantic version for LLM output."""
+
+    name: str = Field(description="Column name from the CSV header")
+    inferred_type: Literal["dimension", "measure", "id", "timestamp"] = Field(
+        description="Semantic type of the column"
+    )
+    data_type: str = Field(
+        description="Data type: string, integer, float, date, or datetime"
+    )
+    cardinality: int = Field(default=0, description="Number of unique values")
+    sample_values: list[str] = Field(
+        default_factory=list, description="Sample values from this column"
+    )
+    nullable: bool = Field(default=False, description="Whether column contains nulls")
+
+
+class TableInfoModel(BaseModel):
+    """Summary info for a table/file - Pydantic version for LLM output."""
+
+    file_id: str = Field(description="ID of the file this table comes from")
+    name: str = Field(description="Name of the table/file")
+    row_count: int = Field(description="Number of rows in the table")
+    column_count: int = Field(description="Number of columns")
+    columns: list[ColumnSchemaModel] = Field(description="Schema for each column")
+
+
+class RelationshipModel(BaseModel):
+    """Detected relationship between tables - Pydantic version for LLM output."""
+
+    from_table: str = Field(description="Source table name")
+    from_column: str = Field(description="Source column name")
+    to_table: str = Field(description="Target table name")
+    to_column: str = Field(description="Target column name")
+    relationship_type: Literal["foreign_key", "similar_values"] = Field(
+        description="Type of relationship"
+    )
+    confidence: float = Field(description="Confidence score 0-1")
+
+
+class DataModelSchema(BaseModel):
+    """Inferred data model - Pydantic version for LLM output."""
+
+    tables: list[TableInfoModel] = Field(description="List of tables with schemas")
+    relationships: list[RelationshipModel] = Field(
+        default_factory=list, description="Detected relationships between tables"
+    )
+    recommended_dimensions: list[str] = Field(
+        default_factory=list,
+        description="Recommended dimension columns for drill-down analysis",
+    )
 
 
 def _load_prompt_template() -> str:
@@ -78,51 +139,56 @@ def _build_file_descriptions(files: list[dict]) -> str:
     return "\n".join(descriptions)
 
 
-def _parse_llm_response(response_text: str) -> DataModel:
-    """Parse the LLM response into a DataModel structure."""
-    # Extract JSON from the response
-    try:
-        # Try to find JSON block in the response
-        if "```json" in response_text:
-            json_start = response_text.find("```json") + 7
-            json_end = response_text.find("```", json_start)
-            json_str = response_text[json_start:json_end].strip()
-        elif "```" in response_text:
-            json_start = response_text.find("```") + 3
-            json_end = response_text.find("```", json_start)
-            json_str = response_text[json_start:json_end].strip()
-        else:
-            # Try to parse the whole response as JSON
-            json_str = response_text.strip()
+def _to_data_model(schema: DataModelSchema) -> DataModel:
+    """Convert Pydantic model to TypedDict for state compatibility.
 
-        data = json.loads(json_str)
-
-        # Build DataModel from parsed data
-        tables = []
-        for table_data in data.get("tables", []):
-            table = TableInfo(
-                file_id=table_data.get("file_id", ""),
-                name=table_data.get("name", ""),
-                row_count=table_data.get("row_count", 0),
-                column_count=table_data.get("column_count", 0),
-                columns=table_data.get("columns", []),
+    The LLM returns a Pydantic model (DataModelSchema), but the LangGraph
+    state expects TypedDict types. This function converts between them.
+    """
+    # Convert tables
+    tables: list[TableInfo] = []
+    for table in schema.tables:
+        columns: list[ColumnSchema] = []
+        for col in table.columns:
+            columns.append(
+                ColumnSchema(
+                    name=col.name,
+                    inferred_type=col.inferred_type,
+                    data_type=col.data_type,
+                    cardinality=col.cardinality,
+                    sample_values=col.sample_values,
+                    nullable=col.nullable,
+                )
             )
-            tables.append(table)
-
-        return DataModel(
-            tables=tables,
-            relationships=data.get("relationships", []),
-            recommended_dimensions=data.get("recommended_dimensions", []),
+        tables.append(
+            TableInfo(
+                file_id=table.file_id,
+                name=table.name,
+                row_count=table.row_count,
+                column_count=table.column_count,
+                columns=columns,
+            )
         )
 
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse LLM response as JSON: {e}")
-        # Return empty data model on parse failure
-        return DataModel(
-            tables=[],
-            relationships=[],
-            recommended_dimensions=[],
+    # Convert relationships
+    relationships: list[Relationship] = []
+    for rel in schema.relationships:
+        relationships.append(
+            Relationship(
+                from_table=rel.from_table,
+                from_column=rel.from_column,
+                to_table=rel.to_table,
+                to_column=rel.to_column,
+                relationship_type=rel.relationship_type,
+                confidence=rel.confidence,
+            )
         )
+
+    return DataModel(
+        tables=tables,
+        relationships=relationships,
+        recommended_dimensions=schema.recommended_dimensions,
+    )
 
 
 async def schema_inference(state: InvestigationState) -> dict:
@@ -155,9 +221,8 @@ async def schema_inference(state: InvestigationState) -> dict:
     prompt_template = _load_prompt_template()
     prompt = prompt_template.replace("{file_descriptions}", file_descriptions)
 
-    # Call LLM
+    # Call LLM with structured output
     try:
-        # Import settings from backend (shared config)
         import os
 
         api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -170,18 +235,21 @@ async def schema_inference(state: InvestigationState) -> dict:
             max_tokens=4096,
         )
 
+        # Use structured output to get Pydantic model directly
+        structured_llm = llm.with_structured_output(DataModelSchema)
+
         messages = [
             SystemMessage(
-                content="You are a data analyst expert. Analyze CSV schemas and return JSON."
+                content="You are a data analyst expert. Analyze the CSV schemas provided."
             ),
             HumanMessage(content=prompt),
         ]
 
-        response = await llm.ainvoke(messages)
-        response_text = response.content
+        # Response is already a DataModelSchema Pydantic model
+        schema_response: DataModelSchema = await structured_llm.ainvoke(messages)
 
-        # Parse response
-        data_model = _parse_llm_response(response_text)
+        # Convert Pydantic model to TypedDict for state compatibility
+        data_model = _to_data_model(schema_response)
 
         # Also update file schemas in the files list
         updated_files = []

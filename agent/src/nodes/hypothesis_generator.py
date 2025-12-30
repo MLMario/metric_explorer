@@ -4,17 +4,63 @@ This node uses an LLM to generate 5-7 hypotheses that could explain
 the metric movement based on the business context and available dimensions.
 """
 
-import json
 import logging
 import os
 from pathlib import Path
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel, Field
 
 from ..state import Hypothesis, InvestigationState
 
 logger = logging.getLogger(__name__)
+
+
+# Pydantic models for structured LLM output
+class HypothesisModel(BaseModel):
+    """Pydantic model for a single hypothesis - for LLM output."""
+
+    id: str = Field(description="Unique identifier like H1, H2, etc.")
+    title: str = Field(description="Short title for the hypothesis")
+    causal_story: str = Field(
+        description="Explanation of why this might cause the metric change"
+    )
+    dimensions: list[str] = Field(
+        default_factory=list, description="Dimensions to investigate"
+    )
+    expected_pattern: str = Field(
+        description="What pattern we expect to see if hypothesis is true"
+    )
+    priority: int = Field(description="Priority ranking, 1 = highest")
+
+
+class HypothesesResponse(BaseModel):
+    """Wrapper for list of hypotheses - for LLM structured output."""
+
+    hypotheses: list[HypothesisModel] = Field(
+        description="List of 5-7 hypotheses to investigate"
+    )
+
+
+def _to_hypotheses(response: HypothesesResponse) -> list[Hypothesis]:
+    """Convert Pydantic model to list of TypedDict for state compatibility.
+
+    The LLM returns a Pydantic model (HypothesesResponse), but the LangGraph
+    state expects TypedDict types. This function converts between them.
+    """
+    return [
+        Hypothesis(
+            id=h.id,
+            title=h.title,
+            causal_story=h.causal_story,
+            dimensions=h.dimensions,
+            expected_pattern=h.expected_pattern,
+            priority=h.priority,
+            status="PENDING",
+        )
+        for h in response.hypotheses
+    ]
 
 
 def _load_prompt_template() -> str:
@@ -78,52 +124,6 @@ def _build_prompt(state: InvestigationState) -> str:
     return prompt
 
 
-def _parse_hypotheses(response_text: str) -> list[Hypothesis]:
-    """Parse LLM response into list of Hypothesis objects."""
-    try:
-        # Extract JSON from the response
-        if "```json" in response_text:
-            json_start = response_text.find("```json") + 7
-            json_end = response_text.find("```", json_start)
-            json_str = response_text[json_start:json_end].strip()
-        elif "```" in response_text:
-            json_start = response_text.find("```") + 3
-            json_end = response_text.find("```", json_start)
-            json_str = response_text[json_start:json_end].strip()
-        else:
-            json_str = response_text.strip()
-
-        data = json.loads(json_str)
-
-        # Handle both array and object with hypotheses key
-        if isinstance(data, dict) and "hypotheses" in data:
-            hypothesis_list = data["hypotheses"]
-        elif isinstance(data, list):
-            hypothesis_list = data
-        else:
-            logger.error("Unexpected JSON structure in hypothesis response")
-            return []
-
-        hypotheses = []
-        for i, h in enumerate(hypothesis_list):
-            hypothesis = Hypothesis(
-                id=h.get("id", f"H{i+1}"),
-                title=h.get("title", f"Hypothesis {i+1}"),
-                causal_story=h.get("causal_story", ""),
-                dimensions=h.get("dimensions", []),
-                expected_pattern=h.get("expected_pattern", ""),
-                priority=h.get("priority", i + 1),
-                status="PENDING",
-            )
-            hypotheses.append(hypothesis)
-
-        return hypotheses
-
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse hypothesis JSON: {e}")
-        return []
-
-
 async def hypothesis_generator(state: InvestigationState) -> dict:
     """Generate hypotheses for the metric movement.
 
@@ -150,36 +150,24 @@ async def hypothesis_generator(state: InvestigationState) -> dict:
             max_tokens=4096,
         )
 
+        # Use structured output to get Pydantic model directly
+        structured_llm = llm.with_structured_output(HypothesesResponse)
+
         messages = [
             SystemMessage(
                 content=(
                     "You are a data scientist expert at generating testable hypotheses "
-                    "for metric investigations. Generate hypotheses in JSON format."
+                    "for metric investigations."
                 )
             ),
             HumanMessage(content=prompt),
         ]
 
-        response = await llm.ainvoke(messages)
-        response_text = response.content
+        # Response is already a HypothesesResponse Pydantic model
+        response: HypothesesResponse = await structured_llm.ainvoke(messages)
 
-        # Parse hypotheses
-        hypotheses = _parse_hypotheses(response_text)
-
-        if not hypotheses:
-            # Generate default hypothesis if parsing failed
-            logger.warning("Failed to parse hypotheses, using default")
-            hypotheses = [
-                Hypothesis(
-                    id="H1",
-                    title="Segment-level change",
-                    causal_story="A specific segment may be driving the overall metric change",
-                    dimensions=state.get("selected_dimensions", [])[:2],
-                    expected_pattern="One segment shows disproportionate change",
-                    priority=1,
-                    status="PENDING",
-                )
-            ]
+        # Convert Pydantic model to TypedDict for state compatibility
+        hypotheses = _to_hypotheses(response)
 
         logger.info(f"Generated {len(hypotheses)} hypotheses")
 
